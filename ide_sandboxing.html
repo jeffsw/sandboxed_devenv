@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keeping an IDE away from your keys</title>
+<meta name="description" content="Notes on sandboxing JetBrains and VS Code on a Linux laptop: boundaries, Wayland, Ubuntu versus Silverblue, and a comparison of Bubblewrap, ai-jail and jailbee.">
+<style>
+:root {
+  --paper: #edf0f4;
+  --surface: #ffffff;
+  --ink: #14213a;
+  --ink-soft: #4a5873;
+  --rule: #cfd6e2;
+  --fence: #2440d6;
+  --fence-wash: #e4e9ff;
+  --caution: #a34a06;
+  --caution-wash: #fdeedd;
+  --serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, serif;
+  --sans: Seravek, "Gill Sans Nova", Ubuntu, Calibri, "DejaVu Sans", "Segoe UI", sans-serif;
+  --mono: ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0f1626;
+    --surface: #172036;
+    --ink: #e4e9f3;
+    --ink-soft: #a3aec4;
+    --rule: #2c3852;
+    --fence: #93a6ff;
+    --fence-wash: #1d2a55;
+    --caution: #f2ab62;
+    --caution-wash: #3a2a17;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 17px/1.6 var(--sans);
+}
+a { color: var(--fence); text-underline-offset: 0.16em; text-decoration-thickness: 0.06em; }
+a:hover { text-decoration-thickness: 0.14em; }
+a:focus-visible { outline: 2px solid var(--fence); outline-offset: 3px; border-radius: 2px; }
+code { font: 0.88em var(--mono); background: var(--fence-wash); padding: 0.08em 0.32em; border-radius: 3px; overflow-wrap: anywhere; }
+
+.page { max-width: 1180px; margin: 0 auto; padding: 0 24px 96px; }
+
+/* Masthead */
+.masthead { padding: 72px 0 40px; max-width: 880px; }
+.masthead h1 {
+  font: 700 clamp(2.3rem, 6vw, 4rem)/1.04 var(--serif);
+  letter-spacing: -0.015em;
+  margin: 0 0 20px;
+  text-wrap: balance;
+}
+.masthead .standfirst { font-size: 1.24rem; line-height: 1.5; color: var(--ink-soft); margin: 0; max-width: 40em; }
+
+/* Layout */
+.layout { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 56px; align-items: start; }
+.rail { position: sticky; top: 24px; font-size: 0.92rem; line-height: 1.35; }
+.rail p { margin: 0 0 10px; font-weight: 700; }
+.rail ol { list-style: none; margin: 0; padding: 0; border-left: 2px dashed var(--fence); }
+.rail li { margin: 0; }
+.rail a { display: block; padding: 6px 0 6px 14px; color: var(--ink); text-decoration: none; }
+.rail a:hover { color: var(--fence); text-decoration: underline; }
+
+main > section { padding-top: 56px; }
+main > section:first-child { padding-top: 0; }
+main h2 { font: 700 1.75rem/1.15 var(--serif); margin: 0 0 16px; text-wrap: balance; }
+main h3 { font: 700 1.12rem/1.3 var(--sans); margin: 34px 0 10px; }
+main p, main ul, main ol { max-width: 43em; }
+main p { margin: 0 0 14px; }
+main ul, main ol { margin: 0 0 16px; padding-left: 1.25em; }
+main li { margin-bottom: 7px; }
+main li::marker { color: var(--fence); }
+
+/* Short version */
+.short {
+  border: 2px dashed var(--fence);
+  border-radius: 10px;
+  padding: 22px 26px 12px;
+  background: var(--surface);
+  max-width: 46em;
+}
+.short h2 { font-size: 1.3rem; margin-bottom: 12px; }
+.howto { color: var(--ink-soft); font-size: 0.95rem; margin-top: 18px; }
+
+.flag {
+  display: inline-block;
+  font-size: 0.74rem;
+  line-height: 1;
+  font-weight: 700;
+  color: var(--caution);
+  background: var(--caution-wash);
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  padding: 3px 6px 3px;
+  vertical-align: 0.1em;
+  white-space: nowrap;
+}
+
+/* Tables */
+.tablewrap {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  margin: 18px 0 14px;
+}
+.tablewrap:focus-visible { outline: 2px solid var(--fence); outline-offset: 2px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.92rem; line-height: 1.42; }
+caption { caption-side: top; text-align: left; padding: 14px 16px 4px; font-weight: 700; font-size: 1rem; }
+th, td { text-align: left; vertical-align: top; padding: 11px 16px; border-top: 1px solid var(--rule); }
+thead th { border-top: 0; border-bottom: 2px solid var(--ink); font-size: 0.95rem; white-space: nowrap; }
+tbody th { font-weight: 700; width: 9.5em; }
+.t3 { min-width: 760px; }
+.t2 { min-width: 600px; }
+.note { font-size: 0.9rem; color: var(--ink-soft); max-width: 50em; }
+
+.meter { display: inline-flex; gap: 3px; margin-right: 8px; vertical-align: -1px; }
+.meter i { width: 9px; height: 13px; border: 1.5px solid var(--fence); border-radius: 2px; }
+.meter i.on { background: var(--fence); }
+
+/* Architecture figure */
+.arch { margin: 22px 0 8px; display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+.arch-pane { background: var(--surface); border: 1px solid var(--rule); border-radius: 8px; padding: 18px 18px 20px; display: flex; flex-direction: column; }
+.arch-pane h3 { margin: 0 0 14px; font-size: 1.02rem; }
+.zone { border-radius: 8px; padding: 10px 14px 12px; }
+.zone strong { display: block; font-size: 0.86rem; margin-bottom: 4px; }
+.zone ul { margin: 0; padding-left: 1.1em; font-size: 0.92rem; line-height: 1.4; }
+.zone li { margin-bottom: 3px; }
+.zone.host { border: 2px solid var(--ink); }
+.zone.box { border: 2.5px dashed var(--fence); background: var(--fence-wash); flex: 1; }
+.wire { margin: 0 0 0 26px; padding: 12px 0 12px 16px; font-size: 0.86rem; line-height: 1.35; max-width: 24em; }
+.wire.wide { border-left: 7px solid var(--caution); color: var(--caution); }
+.wire.thin { border-left: 2px solid var(--fence); color: var(--fence); }
+figcaption { grid-column: 1 / -1; font-size: 0.9rem; color: var(--ink-soft); max-width: 50em; }
+
+/* Sources */
+.sources h3 { margin-top: 26px; }
+.sources ul { list-style: none; padding: 0; max-width: 52em; font-size: 0.95rem; }
+.sources li { padding: 6px 0; border-top: 1px solid var(--rule); margin: 0; }
+.sources li span { color: var(--ink-soft); }
+
+footer { margin-top: 64px; padding-top: 18px; border-top: 2px dashed var(--fence); font-size: 0.9rem; color: var(--ink-soft); max-width: 50em; }
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: minmax(0, 1fr); gap: 28px; }
+  .rail { position: static; }
+  .rail ol { columns: 2; column-gap: 20px; }
+  .rail li { break-inside: avoid; }
+  .masthead { padding-top: 44px; }
+}
+@media (max-width: 640px) {
+  body { font-size: 16px; }
+  .page { padding: 0 16px 64px; }
+  .arch { grid-template-columns: 1fr; }
+  .rail ol { columns: 1; }
+  .short { padding: 18px 18px 8px; }
+  th, td { padding: 10px 12px; }
+}
+@media print {
+  .rail { display: none; }
+  .layout { display: block; }
+  body { background: #fff; font-size: 11pt; }
+  .tablewrap { overflow: visible; }
+  .t3, .t2 { min-width: 0; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="masthead">
+  <h1>Keeping an IDE away from your keys</h1>
+  <p class="standfirst">Notes on sandboxing JetBrains and VS Code on a Linux laptop, so that a hostile repository or a misled AI agent cannot reach SSH keys, GitHub tokens and other secrets.</p>
+</header>
+
+<div class="layout">
+
+<nav class="rail" aria-label="Contents">
+  <p>On this page</p>
+  <ol>
+    <li><a href="#short">Short version</a></li>
+    <li><a href="#threat">Why opening a project is enough</a></li>
+    <li><a href="#boundaries">How strong each boundary is</a></li>
+    <li><a href="#shapes">Two ways to run the IDE</a></li>
+    <li><a href="#wayland">A sandboxed IDE as a native window</a></li>
+    <li><a href="#guidance">What vendors and distributions say</a></li>
+    <li><a href="#tools">Bubblewrap, ai-jail and jailbee</a></li>
+    <li><a href="#practice">Whichever sandbox you pick</a></li>
+    <li><a href="#questions">Open questions</a></li>
+    <li><a href="#others">Other projects seen</a></li>
+    <li><a href="#sources">Sources</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<section id="short">
+  <div class="short">
+    <h2>Short version</h2>
+    <ul>
+      <li>Opening a project already runs its code. The sandbox has to contain the IDE's own indexing and build machinery and its AI agent, not only the terminal.</li>
+      <li>Neither JetBrains nor Microsoft documents a supported way to run the whole IDE inside a sandbox. Their dev container and remote modes are built for convenience, and both vendors treat the link between the two halves as trusted.</li>
+      <li>On Linux, a sandboxed IDE can still be an ordinary desktop window: bind the Wayland socket into the sandbox and nothing else. The recipes for this are community posts, not vendor documentation.</li>
+      <li>Three tools came up for doing it. Bubblewrap is a mature building block, ai-jail is popular but seven months old, and jailbee is new and has one author. None is a finished answer for a graphical IDE.</li>
+      <li>For code from a stranger, such as a recruiter's take-home test, the tools' own documentation says to use a disposable virtual machine.</li>
+    </ul>
+  </div>
+  <p class="howto">Researched on 7 October 2026 from public sources, which are linked throughout and listed at the end. Nothing on this page was tested hands-on. A claim marked <span class="flag">untested</span> comes from general knowledge, not from a source that was checked.</p>
+</section>
+
+<section id="threat">
+  <h2>Why opening a project is enough</h2>
+  <p>The fake-recruiter campaign known as Contagious Interview asks a developer to open a repository for a code review or a coding test. The repository carries a <code>.vscode/tasks.json</code> file with a task set to run when the folder opens, and that task downloads the malware. <a href="https://about.gitlab.com/blog/how-to-detect-and-prevent-contagious-interview-ide-attacks/">GitLab's write-up</a> notes that forks of VS Code are affected in the same way.</p>
+  <p>VS Code asks whether you trust a workspace before running tasks, but it asks once. After that, a later pull can add a malicious task with no new prompt, as <a href="https://nhimg.org/articles/vs-code-tasks-files-let-attackers-trigger-developer-infection-chains/">this summary of Abstract Security's analysis</a> describes. <a href="https://opensourcemalware.com/blog/contagious-interview-vscode">OpenSourceMalware</a> lists what the payload goes looking for, which includes wallet and key files in the home directory.</p>
+  <p>JetBrains IDEs have their own versions of this: Gradle or Maven sync runs build scripts, and package install hooks, test runners and language servers all execute project code <span class="flag">untested</span>. An AI agent adds a second route, because instructions planted in a README or a code comment can steer it.</p>
+</section>
+
+<section id="boundaries">
+  <h2>How strong each boundary is</h2>
+  <div class="tablewrap" tabindex="0" role="region" aria-label="Boundary strength">
+    <table class="t2">
+      <thead><tr><th>Boundary</th><th>Strength</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Toolbx or Distrobox</th><td><span class="meter" aria-hidden="true"><i></i><i></i><i></i><i></i></span>None</td><td>The container gets your home directory, external storage and devices. Fedora's documentation says not to treat Toolbx as a sandbox, and Distrobox's author has declined to add a sandboxed mode.</td></tr>
+        <tr><th scope="row">Namespace sandbox or container with only the project mounted</th><td><span class="meter" aria-hidden="true"><i class="on"></i><i class="on"></i><i></i><i></i></span>Good</td><td>Bubblewrap, rootless Podman, Incus containers. Shares the host kernel, so a kernel bug is a way out. Never mount the Docker socket into it.</td></tr>
+        <tr><th scope="row">Virtual machine per project</th><td><span class="meter" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span>Strong</td><td>Separate kernel. Use no shared folders, and snapshot or delete when done. Costs memory, and graphics and clipboard are bridged.</td></tr>
+        <tr><th scope="row">Separate machine or cloud VM</th><td><span class="meter" aria-hidden="true"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span>Strongest</td><td>The right place for anything from a stranger.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>An immutable host such as Fedora Silverblue protects the operating system. The keys, tokens and browser sessions an attacker wants are in the home directory, which is as writable there as anywhere else.</p>
+</section>
+
+<section id="shapes">
+  <h2>Two ways to run the IDE</h2>
+  <figure class="arch">
+    <div class="arch-pane">
+      <h3>Split: window on the host, backend in the sandbox</h3>
+      <div class="zone host"><strong>Host</strong><ul><li>IDE window</li><li>Your SSH key, tokens, browser sessions</li></ul></div>
+      <p class="wire wide">IDE protocol, in both directions. Carries credentials by default, and the vendors treat it as trusted.</p>
+      <div class="zone box"><strong>Sandbox</strong><ul><li>IDE backend, indexing, builds</li><li>AI agent</li><li>Project code and its secrets</li></ul></div>
+    </div>
+    <div class="arch-pane">
+      <h3>Whole IDE inside the sandbox</h3>
+      <div class="zone host"><strong>Host</strong><ul><li>Desktop compositor</li><li>Your SSH key, tokens, browser sessions</li></ul></div>
+      <p class="wire thin">Wayland socket only. The IDE can draw its window and use the clipboard while it has focus.</p>
+      <div class="zone box"><strong>Sandbox</strong><ul><li>IDE window and backend, indexing, builds</li><li>AI agent</li><li>Project code and its secrets</li></ul></div>
+    </div>
+    <figcaption>The dashed line is the sandbox. The split model is what VS Code Dev Containers and JetBrains Remote Development give you. The second model is what this page is trying to find a good recipe for.</figcaption>
+  </figure>
+
+  <h3>What the vendors say about the split model</h3>
+  <ul>
+    <li><strong>VS Code forwards credentials by default.</strong> The Dev Containers extension <a href="https://code.visualstudio.com/remote/advancedcontainers/sharing-git-credentials">shares local Git credentials and automatically forwards a running SSH agent</a>. Settings exist to reduce this, but one user reported <a href="https://github.com/microsoft/vscode-remote-release/issues/9897">SSH to GitHub still working from the container</a> after turning them off, and a <a href="https://github.com/microsoft/vscode-remote-release/issues/9466">request for a single switch to disable all sharing</a> is open.</li>
+    <li><strong>VS Code's remote link runs both ways.</strong> Microsoft's <a href="https://marketplace.visualstudio.com/items/ms-vscode-remote.remote-ssh">Remote-SSH page</a> warns that a compromised remote could use the connection to execute code on your local machine. <a href="https://blog.calif.io/p/vibe-hacking-abusing-developer-trust">Calif demonstrated it</a>: an extension on the remote side opens a terminal on the local machine.</li>
+    <li><strong>JetBrains is similar in principle.</strong> Its <a href="https://www.jetbrains.com/help/idea/security-model.html">remote development security model</a> says information on either side may be forwarded to the other without user interaction, and names GitHub authorization as a case where that happens in the background. SSH agent forwarding is a checkbox under Tools, SSH Forwarding; the default was not confirmed.</li>
+    <li><strong>Hardening is possible but fiddly.</strong> Community guides for <a href="https://tessl.io/registry/daaain/devcontainer-security/files/SECURITY-HARDENING.md">locking down a VS Code dev container</a> blank out the forwarding variables and delete sockets that VS Code injects, and note that VS Code puts some of them back. <a href="https://github.com/StefanMaron/claudeCodeAlDevContainer">Another</a> states plainly that VS Code dev containers are not a security boundary.</li>
+  </ul>
+</section>
+
+<section id="wayland">
+  <h2>A sandboxed IDE as a native window</h2>
+  <p>A virtual machine has its own display, so graphics and the clipboard are bridged by guest agents, which is where the rough edges come from. A container or namespace sandbox is ordinary host processes with a restricted view. If you bind the compositor's Wayland socket into it, the IDE talks to the real compositor, and you get a normal window with native scaling, copy and paste, and drag and drop.</p>
+  <p>JetBrains IDEs <a href="https://blog.jetbrains.com/platform/2026/02/wayland-by-default-in-2026-1-eap/">run natively on Wayland by default from 2026.1</a>, so the socket is all the display access they need. JetBrains' Remote Development client does not yet enable Wayland automatically.</p>
+
+  <div class="tablewrap" tabindex="0" role="region" aria-label="What you share and what it costs">
+    <table class="t2">
+      <thead><tr><th>Shared into the sandbox</th><th>What you get</th><th>Risk</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Wayland socket</th><td>Native windows, clipboard, input</td><td>Modest. Apps cannot read each other's windows or keystrokes, but the IDE can read and replace the clipboard while it has focus.</td></tr>
+        <tr><th scope="row">X11 socket</th><td>Older applications</td><td>High. Any X client can log keys and capture other X windows. Do not share it.</td></tr>
+        <tr><th scope="row">GPU device (<code>/dev/dri</code>)</th><td>Hardware acceleration</td><td>Exposes the host kernel's GPU driver, a large interface. Optional: start without it.</td></tr>
+        <tr><th scope="row">D-Bus session bus, rest of the runtime directory</th><td>Notifications, keyring, opening links</td><td>High. These reach the keyring and other desktop services. Leave them out.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <ul>
+    <li><strong>This is Linux only.</strong> On macOS, Linux containers run inside a virtual machine, so there is no native-window path.</li>
+    <li><strong>Compositors differ.</strong> Some offer extra protocols for screen capture or clipboard monitoring to any client. The <a href="https://wayland.app/protocols/security-context-v1">security-context protocol</a> lets a sandbox mark its connection so the compositor can restrict those. Flatpak uses it; a hand-written sandbox does not get it automatically.</li>
+    <li><strong>A VM with a real GPU share may be coming.</strong> Intel's Linux driver <a href="https://www.phoronix.com/news/Intel-SR-IOV-PTL-ARL-State">officially supports GPU virtualization on Panther Lake</a>, though Intel had <a href="https://www.phoronix.com/news/Intel-VFIO-Xe-PCI-Driver-Linux">not said which products get it</a>.</li>
+    <li><strong>Per-window forwarding from a VM.</strong> Tools such as waypipe can show a VM's application windows on the host desktop, keeping the separate kernel at the cost of some latency <span class="flag">untested</span>.</li>
+  </ul>
+</section>
+
+<section id="guidance">
+  <h2>What vendors and distributions say</h2>
+  <p>No official guidance was found from JetBrains, Microsoft, Canonical or Fedora for running a full IDE in a container with a Wayland socket.</p>
+
+  <h3>Packaged builds do not help</h3>
+  <ul>
+    <li>The <a href="https://github.com/flathub/com.jetbrains.IntelliJ-IDEA-Community">IntelliJ IDEA Community Flatpak</a> requests the whole host filesystem, all devices and the SSH agent socket.</li>
+    <li>The <a href="https://github.com/flathub/com.visualstudio.code">VS Code Flatpak</a> is an unofficial build and holds a permission that lets it <a href="https://discourse.flathub.org/t/permissions-and-forced-sandboxing/5977">run commands on the host</a>.</li>
+    <li>The Snap builds of both IDEs use classic confinement, which is no sandbox <span class="flag">untested</span>.</li>
+  </ul>
+
+  <h3>Community recipes worth reading</h3>
+  <ul>
+    <li><strong>Podman with a Wayland socket.</strong> Fedora forum threads on <a href="https://discussion.fedoraproject.org/t/how-can-i-create-a-container-with-podman-that-runs-graphical-application-in-isolation-from-the-file-system/73520">running a graphical app isolated from the filesystem</a> and on <a href="https://discussion.fedoraproject.org/t/cannot-run-wayland-gui-app-in-podman/105151">getting Wayland apps to start</a>.</li>
+    <li><strong>Incus.</strong> A maintained <a href="https://discuss.linuxcontainers.org/t/incus-lxd-profile-for-gui-apps-wayland-x11-and-pulseaudio/18295">profile for graphical apps in Incus containers</a>, tested with Ubuntu 24.04 as host. It shares Wayland, X and audio, so trim it to Wayland.</li>
+    <li><strong>Bubblewrap.</strong> <a href="https://chat.macaw.me/community/news.movim.eu/PlanetGnome/urn-uuid-aa27255b-d219-5783-9d9d-a8c2943ed2a2">Ivan Molodetskikh's script</a> creates a fresh home and binds only the Wayland socket into a new runtime directory. <a href="https://bilder.joachim-breitner.de/blog/812-Convenient_sandboxed_development_environment">Joachim Breitner's setup</a> runs VS Code and its extensions inside the sandbox with a separate development home.</li>
+  </ul>
+
+  <h3>Ubuntu or Fedora Silverblue</h3>
+  <div class="tablewrap" tabindex="0" role="region" aria-label="Ubuntu compared with Fedora Silverblue">
+    <table class="t2">
+      <thead><tr><th></th><th>Ubuntu</th><th>Fedora Silverblue</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Official statement</th><td>None for this pattern</td><td><a href="https://docs.fedoraproject.org/en-US/atomic-desktops/toolbox/">Toolbx must not be treated as a sandbox</a></td></tr>
+        <tr><th scope="row">Main friction</th><td><a href="https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007">AppArmor restricts unprivileged user namespaces</a>. Plain Bubblewrap fails on 24.04 without a profile; <a href="https://developers.openai.com/codex/concepts/sandboxing.md">25.04 and later ship one</a>. Podman has its own.</td><td>SELinux blocks the container from the Wayland socket unless labeling is relaxed. Forum recipes use <code>label=type:container_runtime_t</code> or <code>label=disable</code>; <a href="https://kyronix.codeberg.page/myDocs/Podman.html">one guide</a> calls the first the safer of the two. The minimum needed was not tested.</td></tr>
+        <tr><th scope="row">Default tooling</th><td>Incus and Podman from the archive; most Bubblewrap guides target it</td><td>Rootless Podman and SELinux confinement of containers out of the box</td></tr>
+        <tr><th scope="row">Hardware note</th><td>Framework's Laptop 13 Pro is its <a href="https://tagteam.harvard.edu/hub_feeds/3382/feed_items/18140419">first Ubuntu Certified system</a></td><td>Supported by Framework, but not the certified path</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>The mechanics are the same on both, so the choice does not lock you in. A setup built on rootless Podman moves between them with only the security-label flag changing.</p>
+</section>
+
+<section id="tools">
+  <h2>Bubblewrap, ai-jail and jailbee</h2>
+  <p>None of the three uses Podman or Docker as the sandbox. Bubblewrap and ai-jail are not containers in the image sense: they run the host's own programs inside restricted namespaces. jailbee uses Incus system containers, each with its own operating system image.</p>
+
+  <div class="tablewrap" tabindex="0" role="region" aria-label="Sandboxing properties">
+    <table class="t3">
+      <caption>Sandboxing</caption>
+      <thead><tr><th></th><th><a href="https://github.com/containers/bubblewrap">Bubblewrap</a></th><th><a href="https://github.com/akitaonrails/ai-jail">ai-jail</a></th><th><a href="https://github.com/VRTFinland/jailbee">jailbee</a></th></tr></thead>
+      <tbody>
+        <tr><th scope="row">What it is</th><td>Low-level sandbox builder, used by Flatpak</td><td>Ready-made wrapper around Bubblewrap, aimed at terminal AI agents</td><td>Manager for per-branch development environments</td></tr>
+        <tr><th scope="row">Mechanism</th><td>Linux namespaces. You write the policy.</td><td>Bubblewrap plus Landlock and seccomp filters</td><td>Unprivileged Incus (LXC) containers. Docker runs nested inside.</td></tr>
+        <tr><th scope="row">Home directory</th><td>Whatever you bind</td><td>Fresh, empty, in-memory home by default</td><td>The container's own, plus per-repository shared state (JetBrains settings, an <code>~/.ssh</code>)</td></tr>
+        <tr><th scope="row">Display</th><td>You bind the Wayland socket yourself</td><td><code>--display</code> mounts only the Wayland socket</td><td>Wayland socket attached by default. D-Bus and audio are opt-in.</td></tr>
+        <tr><th scope="row">Credentials</th><td>Only what you bind</td><td>SSH sharing is off unless you pass <code>--ssh</code></td><td>Access to the host's SSH and GPG agents is part of the design. Check what is on and turn off what you do not want.</td></tr>
+        <tr><th scope="row">Network control</th><td>On or off</td><td>Off unless you pass <code>--network</code></td><td>Per-container allowlist of permitted hosts</td></tr>
+        <tr><th scope="row">Its own stated limit</th><td>"Not a complete, ready-made sandbox with a specific security policy"</td><td>Not a replacement for a disposable VM when running hostile code</td><td>Its security page cautions about code pulled back to the host through its Git bridge, which host tools then read</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tablewrap" tabindex="0" role="region" aria-label="Project activity">
+    <table class="t3">
+      <caption>Project activity on 7 October 2026</caption>
+      <thead><tr><th></th><th>Bubblewrap</th><th>ai-jail</th><th>jailbee</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Stars and forks</th><td>8.5k and 374</td><td>1.1k and 104</td><td>3 and 1</td></tr>
+        <tr><th scope="row">First commit</th><td>February 2016</td><td>March 2026</td><td>August 2026</td></tr>
+        <tr><th scope="row">Commits</th><td>747, of which 59 in the last 90 days</td><td>473, of which 231 in the last 90 days</td><td>2,022, all in the last 90 days</td></tr>
+        <tr><th scope="row">Commit authors</th><td>78, of which 8 in the last 90 days</td><td>37, of which 18 in the last 90 days. One person wrote about 400 of the commits.</td><td>6. One person wrote 2,017 of the commits.</td></tr>
+        <tr><th scope="row">Open pull requests and issues</th><td>42 and 149</td><td>Pull requests not retrieved; 1 issue</td><td>10 pull requests; issues not retrieved</td></tr>
+        <tr><th scope="row">Latest release</th><td>0.13.0 on 22 September</td><td>2.7.0 on 7 October</td><td>1.6.0 on 2 October</td></tr>
+        <tr><th scope="row">Forum</th><td>No Discussions tab. Issue tracker only.</td><td>Not confirmed. The <a href="https://akitaonrails.com/en/2026/01/10/ai-agents-locking-down-your-system/">author's blog</a> has comments.</td><td>No Discussions tab. <a href="https://jailbee.gisgro.io/docs/">Documentation site</a> and a news feed.</td></tr>
+        <tr><th scope="row">License</th><td>LGPL</td><td>GPL 3.0</td><td>GPL 3.0 or later</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">Stars, forks and open counts were read from the GitHub pages. Commit and author figures were computed from a clone of each repository. Authors are distinct commit email addresses, which overcounts anyone who commits under more than one.</p>
+  <p>Bubblewrap is mature and ships in every major distribution. ai-jail is popular, changes almost daily and is mostly one author. jailbee is in effect a one-person project with almost no outside users yet.</p>
+
+  <h3>Guides for a specific IDE, and for recruiter scams</h3>
+  <ul>
+    <li><strong>JetBrains.</strong> Only jailbee has first-class support: <code>jailbee ide</code> launches the IDE from the container, using a JetBrains Toolbox install on the host. No guide was found for a JetBrains IDE under Bubblewrap or ai-jail. The nearest, <a href="https://github.com/dontdrinkandroot/opencode-bubblewrap">opencode-bubblewrap</a>, sandboxes an agent that a JetBrains IDE talks to, not the IDE.</li>
+    <li><strong>VS Code.</strong> <a href="https://bilder.joachim-breitner.de/blog/812-Convenient_sandboxed_development_environment">Joachim Breitner's post</a> runs VS Code inside Bubblewrap, over X11. Nothing specific was found for ai-jail or jailbee. One <a href="https://github.com/DiogoF-Hub/claude-code-wsl-sandbox">ai-jail walkthrough</a> exists for a terminal agent under WSL.</li>
+    <li><strong>Recruiter scams.</strong> None of the three mentions them. <a href="https://www.atlassian.com/blog/how-we-build/disrupting-contagious-interview">Atlassian's write-up</a> recommends a dedicated, isolated environment for take-home tests and setting VS Code's <code>task.allowAutomaticTasks</code> to off, without naming a tool.</li>
+  </ul>
+
+  <h3>Effort to try each</h3>
+  <div class="tablewrap" tabindex="0" role="region" aria-label="Effort to try each tool">
+    <table class="t2">
+      <thead><tr><th></th><th>Estimate</th><th>Where the time goes</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">ai-jail</th><td>1 to 3 hours</td><td>Installing takes minutes. The work is mapping a persistent directory so the IDE's settings, license sign-in and indexes survive the in-memory home, then checking that no credentials are visible inside.</td></tr>
+        <tr><th scope="row">Bubblewrap script</th><td>4 to 8 hours</td><td>Adapting a published script until a graphical IDE runs properly (fonts, DNS, GPU, persistent directories), then testing it.</td></tr>
+        <tr><th scope="row">jailbee</th><td>3 to 5 hours</td><td>Incus and ID-mapping setup, a 10 to 15 minute image build, per-repository configuration, switching off the sharing you do not want, and learning its Git workflow.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">These are estimates, not measurements. They assume someone comfortable on a Linux command line, starting from a ready virtual machine.</p>
+  <ul>
+    <li><strong>Trial host.</strong> An Ubuntu 26.04 VM covers all three. <a href="https://jailbee.gisgro.io/docs/installation/">jailbee's installation guide</a> recommends it and does not mention Fedora. Bubblewrap and ai-jail should also work on Silverblue <span class="flag">untested</span>.</li>
+    <li><strong>VS Code inside another sandbox.</strong> VS Code is built on Chromium, which brings its own sandbox, and that can misbehave when nested. JetBrains IDEs mostly avoid the problem <span class="flag">untested</span>.</li>
+  </ul>
+</section>
+
+<section id="practice">
+  <h2>Whichever sandbox you pick</h2>
+  <h3>Secrets per project</h3>
+  <ul>
+    <li><strong>Main SSH key.</strong> Keep it out of every sandbox and do not forward the agent. A hardware-backed key that needs a touch cannot be copied even if the host is compromised.</li>
+    <li><strong>Git access.</strong> Generate a key inside the sandbox and register it as a deploy key for that one repository, or use a fine-grained GitHub token limited to that repository with a short expiry.</li>
+    <li><strong>Other secrets.</strong> Inject only what the project needs, and prefer short-lived cloud credentials.</li>
+    <li><strong>The limit of isolation.</strong> Anything you put inside can still be sent out by code running there, including the IDE's own AI sign-in. Outbound network rules are the only control for that.</li>
+    <li><strong>Git on the host.</strong> Do not run Git on the host against a working tree the sandbox can write to. Hooks and repository configuration can execute commands. Run Git inside.</li>
+  </ul>
+  <h3>Building and testing</h3>
+  <ul>
+    <li>The toolchain lives inside the sandbox, and builds, tests and debugging run there as they would locally.</li>
+    <li>For Python, install <code>uv</code> inside and let it manage interpreter versions. Keep <code>.venv</code> inside the sandbox and put the uv cache on a persistent volume so rebuilds stay fast.</li>
+    <li>Tests that need Docker should use Podman or Docker running inside the sandbox, never the host's socket.</li>
+    <li>Reach a web app under development through a forwarded port.</li>
+  </ul>
+  <h3>Take-home tests from recruiters</h3>
+  <p>Never open one on a machine or profile that holds anything you care about. Use a throwaway VM with no shared folders, or a cloud environment in the browser, and delete it afterwards. Pressure to run the code quickly, or before a call, is the usual tell. If you think a machine was compromised, Atlassian's advice is to reimage it; deleting the repository is not enough.</p>
+</section>
+
+<section id="questions">
+  <h2>Open questions</h2>
+  <p>This looked like something that would be a solved, common setup by now, and it does not seem to be. Answers from anyone who has done this would help.</p>
+  <ul>
+    <li>Does anyone run a full JetBrains IDE or VS Code inside Bubblewrap, Podman or Incus day to day? What broke, and what did you have to let through?</li>
+    <li>Has anyone checked what still reaches a dev container after credential forwarding is turned off, in either IDE?</li>
+    <li>On Fedora, what is the smallest SELinux change that lets a rootless container use the Wayland socket?</li>
+    <li>Is software rendering acceptable for a JetBrains IDE on a high-resolution panel, or is the GPU device needed in practice?</li>
+    <li>How do you issue per-project credentials (deploy keys, fine-grained tokens) without it turning into a chore?</li>
+    <li>Is there a tool or write-up this page missed?</li>
+  </ul>
+</section>
+
+<section id="others">
+  <h2>Other projects seen</h2>
+  <p>These turned up during the search and were not evaluated.</p>
+  <ul>
+    <li><a href="https://github.com/mensfeld/code-on-incus/wiki/Architecture-and-Security-Model">code-on-incus</a>: Incus containers for AI coding tools, with a written security model that covers Git hooks and editor configuration.</li>
+    <li><a href="https://pkg.go.dev/github.com/terrakuh/devc@v1.2.0">devc</a>: reads a <code>devcontainer.json</code>, starts it with Podman or Docker and exposes it as an SSH host for an editor. Agent forwarding is opt-in.</li>
+    <li><a href="https://pkg.go.dev/github.com/whiskeyjimbo/bento@v0.1.0">Bento</a>: deny-by-default sandbox for scripts and agent actions, built on Bubblewrap, seccomp and Landlock.</li>
+    <li><a href="https://www.qubes-os.org/">Qubes OS</a>: an operating system built around one virtual machine per activity, for anyone who wants this model throughout.</li>
+  </ul>
+</section>
+
+<section id="sources" class="sources">
+  <h2>Sources</h2>
+
+  <h3>The threat</h3>
+  <ul>
+    <li><a href="https://about.gitlab.com/blog/how-to-detect-and-prevent-contagious-interview-ide-attacks/">How to detect and prevent Contagious Interview IDE attacks</a> <span>GitLab</span></li>
+    <li><a href="https://nhimg.org/articles/vs-code-tasks-files-let-attackers-trigger-developer-infection-chains/">VS Code tasks files let attackers trigger developer infection chains</a> <span>NHI Mgmt Group</span></li>
+    <li><a href="https://opensourcemalware.com/blog/contagious-interview-vscode">Contagious Interview malware weaponizes VS Code tasks</a> <span>OpenSourceMalware</span></li>
+    <li><a href="https://opensourcemalware.com/blog/dprk-contagious-interview-campaign-fake-font-uses-malicious-vs-code-fonts">The "Fake Font" variant</a> <span>OpenSourceMalware</span></li>
+    <li><a href="https://www.atlassian.com/blog/how-we-build/disrupting-contagious-interview">Disrupting Contagious Interview</a> <span>Atlassian</span></li>
+  </ul>
+
+  <h3>VS Code and JetBrains</h3>
+  <ul>
+    <li><a href="https://code.visualstudio.com/remote/advancedcontainers/sharing-git-credentials">Sharing Git credentials with your container</a> <span>VS Code documentation</span></li>
+    <li><a href="https://marketplace.visualstudio.com/items/ms-vscode-remote.remote-ssh">Remote - SSH extension page, with its security note</a> <span>Microsoft</span></li>
+    <li><a href="https://blog.calif.io/p/vibe-hacking-abusing-developer-trust">Abusing developer trust in Cursor and VS Code remote development</a> <span>Calif</span></li>
+    <li><a href="https://github.com/microsoft/vscode-remote-release/issues/9897">SSH still available in container after disabling forwarding</a> <span>vscode-remote-release issue 9897</span></li>
+    <li><a href="https://github.com/microsoft/vscode-remote-release/issues/9466">Disable credential sharing</a> <span>vscode-remote-release issue 9466</span></li>
+    <li><a href="https://tessl.io/registry/daaain/devcontainer-security/files/SECURITY-HARDENING.md">Dev container security hardening guide</a> <span>community</span></li>
+    <li><a href="https://github.com/StefanMaron/claudeCodeAlDevContainer">Dev container hardened for a coding agent</a> <span>community</span></li>
+    <li><a href="https://www.jetbrains.com/help/idea/security-model.html">Remote development security model</a> <span>JetBrains documentation</span></li>
+    <li><a href="https://www.jetbrains.com/help/idea/connect-to-devcontainer.html">Dev Container overview</a> <span>JetBrains documentation</span></li>
+    <li><a href="https://blog.jetbrains.com/platform/2026/02/wayland-by-default-in-2026-1-eap/">Wayland by default in 2026.1 EAP</a> <span>JetBrains Platform blog</span></li>
+    <li><a href="https://www.omgubuntu.co.uk/2026/02/intellij-native-wayland-support-2026-1">IntelliJ native Wayland support in 2026.1</a> <span>OMG! Ubuntu</span></li>
+    <li><a href="https://github.com/flathub/com.jetbrains.IntelliJ-IDEA-Community">IntelliJ IDEA Community Flatpak and its permissions</a> <span>Flathub</span></li>
+    <li><a href="https://github.com/flathub/com.visualstudio.code">Visual Studio Code Flatpak, unofficial build</a> <span>Flathub</span></li>
+    <li><a href="https://discourse.flathub.org/t/permissions-and-forced-sandboxing/5977">Permissions and forced sandboxing</a> <span>Flathub forum</span></li>
+  </ul>
+
+  <h3>Wayland and graphics</h3>
+  <ul>
+    <li><a href="https://wayland.app/protocols/security-context-v1">security-context-v1 protocol</a> <span>Wayland protocols</span></li>
+    <li><a href="https://github.com/flatpak/flatpak/releases">Flatpak release notes, Wayland security context</a> <span>Flatpak</span></li>
+    <li><a href="https://www.phoronix.com/news/Intel-SR-IOV-PTL-ARL-State">Intel SR-IOV support ready for Panther Lake graphics</a> <span>Phoronix</span></li>
+    <li><a href="https://www.phoronix.com/news/Intel-Xe-Linux-6.17-PF-4K">Intel Xe enabling SR-IOV PF by default</a> <span>Phoronix</span></li>
+    <li><a href="https://www.phoronix.com/news/Intel-VFIO-Xe-PCI-Driver-Linux">Intel posts patches for a VFIO Xe PCI driver</a> <span>Phoronix</span></li>
+  </ul>
+
+  <h3>Distributions</h3>
+  <ul>
+    <li><a href="https://docs.fedoraproject.org/en-US/atomic-desktops/toolbox/">Toolbx on Fedora Atomic Desktops</a> <span>Fedora documentation</span></li>
+    <li><a href="https://lwn.net/SubscriberLink/1049423/ea698e5387d5a94a/">Distrobox</a> <span>LWN</span></li>
+    <li><a href="https://discussion.fedoraproject.org/t/how-can-i-create-a-container-with-podman-that-runs-graphical-application-in-isolation-from-the-file-system/73520">Graphical app in Podman, isolated from the filesystem</a> <span>Fedora forum</span></li>
+    <li><a href="https://discussion.fedoraproject.org/t/cannot-run-wayland-gui-app-in-podman/105151">Cannot run Wayland GUI app in Podman</a> <span>Fedora forum</span></li>
+    <li><a href="https://kyronix.codeberg.page/myDocs/Podman.html">Podman notes comparing SELinux label options</a> <span>community</span></li>
+    <li><a href="https://discuss.linuxcontainers.org/t/incus-lxd-profile-for-gui-apps-wayland-x11-and-pulseaudio/18295">Incus and LXD profile for GUI apps</a> <span>Linux Containers forum</span></li>
+    <li><a href="https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007">Understanding AppArmor user namespace restriction</a> <span>Ubuntu Discourse</span></li>
+    <li><a href="https://bugs.launchpad.net/bugs/2035315">Unprivileged user namespace restrictions break various applications</a> <span>Launchpad bug 2035315</span></li>
+    <li><a href="https://developers.openai.com/codex/concepts/sandboxing.md">Sandboxing, with a note on Ubuntu and Bubblewrap</a> <span>OpenAI Codex documentation</span></li>
+    <li><a href="https://tagteam.harvard.edu/hub_feeds/3382/feed_items/18140419">Framework's CEO on creating a "MacBook Pro for Linux users"</a> <span>Ars Technica, via TagTeam</span></li>
+  </ul>
+
+  <h3>The three tools</h3>
+  <ul>
+    <li><a href="https://github.com/containers/bubblewrap">containers/bubblewrap</a> <span>repository</span></li>
+    <li><a href="https://github.com/containers/bubblewrap/releases">Bubblewrap releases</a> <span>repository</span></li>
+    <li><a href="https://wiki.archlinux.org/title/Bubblewrap">Bubblewrap</a> <span>Arch Wiki</span></li>
+    <li><a href="https://chat.macaw.me/community/news.movim.eu/PlanetGnome/urn-uuid-aa27255b-d219-5783-9d9d-a8c2943ed2a2">Easy sandboxing on Linux with Bubblewrap</a> <span>Ivan Molodetskikh, via a Planet GNOME mirror</span></li>
+    <li><a href="https://bilder.joachim-breitner.de/blog/812-Convenient_sandboxed_development_environment">Convenient sandboxed development environment</a> <span>Joachim Breitner</span></li>
+    <li><a href="https://github.com/dontdrinkandroot/opencode-bubblewrap">opencode-bubblewrap</a> <span>repository</span></li>
+    <li><a href="https://github.com/akitaonrails/ai-jail">akitaonrails/ai-jail</a> <span>repository</span></li>
+    <li><a href="https://docs.rs/crate/ai-jail/latest">ai-jail README</a> <span>docs.rs</span></li>
+    <li><a href="https://akitaonrails.com/en/2026/01/10/ai-agents-locking-down-your-system/">AI agents: locking down your system</a> <span>Fabio Akita</span></li>
+    <li><a href="https://github.com/DiogoF-Hub/claude-code-wsl-sandbox">Sandboxed coding agent on Windows with WSL 2 and ai-jail</a> <span>community</span></li>
+    <li><a href="https://github.com/VRTFinland/jailbee">VRTFinland/jailbee</a> <span>repository</span></li>
+    <li><a href="https://pypi.org/project/jailbee/">jailbee</a> <span>PyPI</span></li>
+    <li><a href="https://jailbee.gisgro.io/docs/security/">jailbee security</a> <span>documentation</span></li>
+    <li><a href="https://jailbee.gisgro.io/docs/installation/">jailbee installation</a> <span>documentation</span></li>
+  </ul>
+
+  <footer>
+    <p>Compiled on 7 October 2026 from an AI-assisted research session using Claude. Figures were read from the linked pages that day and will go stale. Effort figures are estimates, and nothing on this page was tested hands-on.</p>
+  </footer>
+</section>
+
+</main>
+</div>
+</div>
+</body>
+</html>
