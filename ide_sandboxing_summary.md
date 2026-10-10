@@ -1,18 +1,16 @@
 # Keeping an IDE away from your keys: options summary and decision notes
 
-Updated 8 October 2026, revision 7. This supersedes the comparison in `ide_sandboxing.html` (7 October), adds Anthropic's `sandbox-runtime`, and is organised around the design chosen since: **JetBrains Gateway with its thin client in a small sandbox and the IDE backend in a virtual machine, one VM per project or a disposable one.** Nothing here has been tested hands-on yet. Figures were read from GitHub, npm, JetBrains documentation and a fresh clone on 8 October and will go stale.
+Updated 9 October 2026, revision 10. This is the design record for the sandboxed development environment, organised around the design chosen on 8 October: **JetBrains Gateway with its thin client in a small sandbox and the IDE backend in a virtual machine, one VM per project or a disposable one.** The rehearsal rig of 4.9 is built and its first two steps passed on 9 October: the JetBrains Client and the Gateway launcher both run on the Wayland toolkit as a second Unix user under GNOME. Everything else is untested. Figures were read from GitHub, npm, JetBrains documentation and the Mac itself on 7 to 9 October and will go stale. The earlier brainstorming document in this repository, `ide_sandboxing.html`, is kept for history only; what it contributed is restated or cited directly here.
 
-## What changed since the HTML
+## Revision history
 
-- The threat is split into three cases with different answers, instead of one "sandbox the IDE" problem.
-- The HTML rejected the split model (IDE window on the host, backend in a sandbox) because the backend can reach the client. That objection disappears when the client itself runs as a low-value principal. JetBrains Gateway is that split model as a supported product, so it is now the named option and has its own section (4), including what the client sandbox and the backend VM each need, the security model read for this design, the display question, and a comparison of per-zone, per-project and disposable VMs.
-- Five candidates the HTML did not cover are added as building blocks: a second Unix user, the Flatpak IntelliJ with tightened overrides, a local Flatpak of the Gateway tarball, a VM with `waypipe`, and a private Xwayland inside the sandbox as a fallback for the thin client.
-- The HTML's note that the IntelliJ Flatpak requests the whole host filesystem and all devices is out of date. The current manifest grants the home directory, and all-devices access was dropped on 1 October 2026. Section 4.3 spells out what "home" means for each sandbox mechanism, since the word hides three different things.
-- `anthropics/sandbox-runtime` (`srt`) was examined. It is not a way to sandbox a graphical IDE. Its two possible roles here, a second sandbox around the agent inside the backend VM and a credential-injecting egress proxy, are parked under Deferred work until the main design is built and in use. Using it to sandbox Claude Code on the Mac as an interim step was considered and dropped; see Abandoned ideas.
-- Credential findings from the current Mac are recorded in section 5, because they decide how bad any compromise is regardless of sandbox.
-- Revision 4: the thin client's Wayland support was checked against the builds JetBrains ships, not against the blog. Clients from 2026.2 select Wayland automatically; the "work in progress" caveat applied to 2026.1 only (4.6).
-- Revision 6: section 3 is reorganised by the part each tool plays in the design, replacing one nine-column table. The Toolbox App, which JetBrains names as Gateway's successor, is examined in 4.2 and found to be X11-only today. The Gateway launcher itself ships no Wayland option, unlike the client; one line in its VM options file covers it (4.6).
-- Revision 7: agent sandboxing inside the backend VM, and the egress proxy that goes with it, are moved out of the main plan into a Deferred work section near the end. The main problem is the IDE and toolchain; the agent layer is judged better once the VMs are in daily use.
+- Revision 10 (9 October, evening): a consolidated pass after a day in the rig. The backend template now installs the everyday tools, `gh` from GitHub's repository, the Claude Code plugin, GitHub's host keys, a git identity and Claude Code's settings with an optional token from `keys/`; the desk template gives the private X server an authorization cookie; the canary checks the SSH client config; the start-up diagrams show `gw-session`, the X server and the pre-provisioned connection. Findings of the day recorded in 4.3, 4.4, 4.5 and 4.9: the embedded browser's needs, the key-access dialog, plugin staging, the settings-file trap, the login callback.
+- Revision 9 (9 October): the rehearsal rig was built and debugged on the Mac (findings recorded in 4.9: UTM's sandbox and scripting gaps, the dracut and NetworkManager interaction, VM isolation on the shared network), and steps 1 and 2 of 4.9 passed: GNOME accepts the second user's Wayland connection, the 2026.2.3 client reports `sun.awt.wl.WLToolkit`, and so does the Gateway launcher with its one VM options line. Open questions answered accordingly; Gateway's stored SSH connection added to the desk template. The canary script was written and run in both roles; its first run showed the second user could reach D-Bus, PipeWire and other sockets in the real user's runtime directory, so `gw-run` now closes them with ACLs (4.3). The embedded browser turned out to need both an X display and an AppArmor profile on the launcher (4.3).
+- Revision 8 (8 October): the "VM per trust zone" option is dropped; per-project and disposable VMs cover every case (4.7). The credential clean-up on the host moves from step 1 to a hardening step at the end, because the rehearsal mints its own keys and never touches the host's (section 5, section 8). New: a start-up walkthrough with diagrams (4.8), the rehearsal rig on the Mac with cloud-init files in `rehearsal/utm/` and a network diagram (4.9), and a check that the current Mac can run it. References to the earlier HTML brainstorming document are removed; its sources are cited directly.
+- Revision 7: agent sandboxing inside the backend VM, and the egress proxy that goes with it, moved out of the main plan into Deferred work.
+- Revision 6: section 3 reorganised by the part each tool plays. The Toolbox App, which JetBrains names as Gateway's successor, examined in 4.2 and found X11-only. The Gateway launcher needs one VM options line for Wayland (4.6).
+- Revision 4: the thin client's Wayland support checked against the builds JetBrains ships rather than the blog. Clients from 2026.2 select Wayland automatically.
+- Revisions 1 to 3: the threat split into three cases (section 1); the split model adopted, since its usual objection, that the backend can reach the client, disappears when the client runs as a low-value principal; the Flatpak IntelliJ manifest read from Flathub (4.3); `sandbox-runtime` examined and found not to be an IDE sandbox; credential findings from the Mac recorded (section 5).
 
 ## 1. Three threats, three answers
 
@@ -22,14 +20,14 @@ Updated 8 October 2026, revision 7. This supersedes the comparison in `ide_sandb
 | Compromised dependency in a project you work in daily | npm or PyPI package, Gradle plugin, a Git hook in a repo you cloned | Persistent backend VM per project, per-project credentials, egress allowlist, sandboxed client | This is the project. Sections 2 to 4. |
 | Misled AI agent | Instructions planted in a README or comment steer Claude Code or the JetBrains assistant | Same as above, plus the agent's own sign-in and tool list kept small | The backend VM, where the agent runs. A second sandbox around the agent inside the VM is deferred work. |
 
-The HTML's main point stands: opening a project is enough to run its code. VS Code tasks, Gradle and Maven sync, package install hooks and language servers all execute project code before you type anything. The IDE's own trust prompts (VS Code workspace trust with `task.allowAutomaticTasks` off, JetBrains Safe Mode for untrusted projects) reduce the automatic surface and cost nothing, but they are not a boundary.
+The premise: opening a project is enough to run its code. VS Code tasks, Gradle and Maven sync, package install hooks and language servers all execute project code before you type anything. The IDE's own trust prompts (VS Code workspace trust with `task.allowAutomaticTasks` off, JetBrains Safe Mode for untrusted projects) reduce the automatic surface and cost nothing, but they are not a boundary.
 
 ## 2. Target architecture
 
 ```
 Host: compositor, 1Password agent with an allowlist, hardware-backed keys, browser, router access
  │
- ├── Client sandbox (second Unix user, Bubblewrap, or a local Flatpak of the Gateway tarball), one per trust zone
+ ├── Client sandbox (second Unix user, Bubblewrap, or a local Flatpak of the Gateway tarball): one for your projects, one for disposable VMs
  │     JetBrains Gateway launcher + JetBrains Client. Sees the Wayland socket and its own small home.
  │     Holds: the JetBrains account sign-in and an SSH key that opens only the backend VMs.
  │     Egress: the VM subnet and the JetBrains download and account hosts. Nothing else.
@@ -40,9 +38,9 @@ Host: compositor, 1Password agent with an allowlist, hardware-backed keys, brows
        Egress: NAT with an nftables or Incus ACL allowlist, or only a proxy on the host.
 ```
 
-Why this beats both models in the HTML:
+Why this design:
 
-- **Kernel boundary where the hostile code runs.** The backend VM is the thing that executes project code, and it has its own kernel. The HTML's "whole IDE in a namespace sandbox" shares the host kernel with the hostile code.
+- **Kernel boundary where the hostile code runs.** The backend VM is the thing that executes project code, and it has its own kernel. A whole-IDE namespace sandbox shares the host kernel with the hostile code.
 - **Native window without Wayland-socket recipes for the whole IDE.** Only the thin client needs the socket. The client is a JetBrains app, so the same sandbox recipes apply, but it is smaller and it never runs project code.
 - **A vendor-supported product on both sides.** JetBrains Remote Development over SSH is documented and maintained. The community Wayland-in-container recipes are not.
 - **The trusted link is harmless.** JetBrains says information may be forwarded either way without user interaction. Forwarding into a sandbox that holds nothing is fine. SSH agent forwarding stays off in the client.
@@ -60,16 +58,16 @@ The chosen design (section 4) is assembled from parts, and most tools that get c
 - **Egress control:** decides what leaves the backend and which credentials reach it.
 - **Agent layer:** an optional second sandbox around the agent's commands inside the backend. Deferred work, listed here only so the catalogue is complete.
 
-The HTML compared Bubblewrap, ai-jail and jailbee as if each were a complete answer. Below, each candidate is placed where it fits.
+Bubblewrap, ai-jail and jailbee are often presented as complete answers. Below, each candidate is placed where it fits.
 
 ### 3.1 Client sandbox candidates
 
 | Candidate | How it isolates | Display | What the client sees | Verdict |
 |---|---|---|---|---|
-| Second Unix user | File permissions and per-UID firewall rules; same kernel and compositor | Host Wayland socket shared with `setfacl` | Its own home; nothing of yours unless copied in | **Try first.** Simplest, and the egress rules are trivial. Needs the compositor to accept a connection from another UID: reported working on Sway, untested on GNOME and KDE. |
+| Second Unix user | File permissions and per-UID firewall rules; same kernel and compositor | Host Wayland socket shared with `setfacl` | Its own home; nothing of yours unless copied in | **Try first.** Simplest, and the egress rules are trivial. Needs the compositor to accept a connection from another UID: verified on GNOME 50 (Mutter) on 9 October, reported working on Sway, untested on KDE. Needs deny ACLs on everything else in the runtime directory (4.3). |
 | Bubblewrap script | Namespaces with a policy you write; runs as you | You bind the socket in yourself | A fresh home with only what you bind | **Second.** Molodetskikh's script is the starting point. Needs the embedded-Chromium property (4.3). |
 | Local Flatpak of the Gateway tarball | Bubblewrap under Flatpak's policy, from a manifest you write | `--socket=wayland` only | Private config and data under `~/.var/app/<id>`; the real home never granted | **Third.** Adds Flatpak's override system and the Wayland security-context marking. Per-app egress rules need cgroup matching because it runs as your UID. |
-| ai-jail | Bubblewrap plus Landlock and seccomp, ready-made | `--display` binds only the Wayland socket | A fresh in-memory home; SSH only with `--ssh` | Built for terminal agents. Nobody has run a graphical client under it; the HTML's 1 to 3 hour estimate is optimistic. |
+| ai-jail | Bubblewrap plus Landlock and seccomp, ready-made | `--display` binds only the Wayland socket | A fresh in-memory home; SSH only with `--ssh` | Built for terminal agents. Nobody has run a graphical client under it; an estimate of a few hours is optimistic. |
 | Flatpak IntelliJ from Flathub, with overrides | Same mechanism as the row above, community manifest | `--socket=wayland` plus `fallback-x11`, so no X11 socket in a Wayland session | Private app data, but the real home, both agent sockets, the GPU and IPC are granted until removed with `flatpak override --user --nofilesystem=home --nosocket=ssh-auth --nosocket=gpg-agent --nosocket=fallback-x11 --unshare=ipc` | Only if the full IDE must run locally; Flathub has no Gateway package. Its value here is as the working precedent for a JetBrains app on a Wayland socket alone (4.3). |
 
 Not a client sandbox: `sandbox-runtime`, which has no display code (the reasons are under Deferred work); Toolbx and Distrobox, which are not a boundary at all, as Fedora's own documentation says; and Dev Containers or Remote Development used as shipped, where the client runs as you, which is the problem this design fixes.
@@ -79,7 +77,6 @@ Not a client sandbox: `sandbox-runtime`, which has no display code (the reasons 
 | Candidate | Boundary | Verdict |
 |---|---|---|
 | VM per project, cloned from a base image, with disposable clones for stranger code | Separate kernel | **Chosen.** Incus as the manager (4.7). |
-| VM per trust zone | Separate kernel, shared by the projects in a zone | Fallback if per-project turns out too heavy (4.7). |
 | Podman or Incus container with the backend inside | Namespaces and a separate userland; shares the host kernel | Lighter than a VM and Gateway connects the same way. A kernel bug is a way out. |
 | jailbee | Incus containers per branch with Docker nested inside; shares the host SSH and GPG agents by design | Read for ideas, do not depend on it (3.5). |
 | VM with the full IDE inside, windows forwarded by `waypipe` over vsock | Separate kernel | Fallback if the thin client disappoints. Rendering glitches with a full IDE are the risk. |
@@ -98,7 +95,7 @@ Qubes OS is this design as a finished operating system: a Xen VM per activity, s
 
 ### 3.5 Maturity of the third-party tools
 
-Figures from the HTML (7 October) except `srt` (8 October).
+Figures read from GitHub on 7 October, `srt` on 8 October.
 
 | Tool | Stars | Commit authors | Age and pace | Note |
 |---|---|---|---|---|
@@ -138,7 +135,7 @@ Licensing: Remote Development is "available in IntelliJ IDEA Ultimate edition on
 | Resident component on the backend | None beyond the IDE backend | Toolbox Agent, version-locked to the app | |
 | SSH client | JetBrains' own implementation | The OpenSSH binary, or jetbrainsd optionally | |
 
-  Three consequences. Toolbox is X11-only today and nothing suggests Wayland work on it, so it would need the fallback that Gateway does not. Toolbox puts a version-locked agent in every backend VM, and Toolbox updates itself, so each update would ripple into every VM and every pre-baked image; Gateway's backend is pinned by its own version and needs nothing resident. Toolbox also wants more from the sandbox: a writable install tree, feed and download egress, a JetBrains account login that on GNOME looks for the secret service, and the daemon. One point in its favour: because it runs the real OpenSSH binary, `ssh_config` applies fully, including a `ProxyCommand` over vsock (4.7).
+  Three consequences. Toolbox is X11-only today and nothing suggests Wayland work on it, so it would need the fallback that Gateway does not. Toolbox puts a version-locked agent in every backend VM, and Toolbox updates itself, so each update would ripple into every VM and every pre-baked image; Gateway's backend is pinned by its own version and needs nothing resident. Toolbox also wants more from the sandbox: a writable install tree, feed and download egress, a JetBrains account login that on GNOME looks for the secret service, and the daemon. One point in its favour: because it runs the real OpenSSH binary, `ssh_config` applies fully, including a `ProxyCommand` over vsock (Deferred work).
 - **Triggers to revisit the launcher choice:** Gateway stops shipping, or the Toolbox App gains native Wayland. The design does not depend on which launcher starts the client, so the launcher is a replaceable part.
 - **Known gaps:** paid plugins on the client were a long-standing gap; staff said support was "planned for 2025.3" and nothing in that thread confirms it shipped. Community posts from August 2026 report plugin failures in 2026.1.4 and 2026.2.0.1 and Copilot problems. Expect the client to lag the local IDE and budget a real working session to find out what matters to you.
 
@@ -147,12 +144,12 @@ Licensing: Remote Development is "available in IntelliJ IDEA Ultimate edition on
 A checklist for whichever mechanism carries the client (second user first, Bubblewrap second, a local Flatpak of the Gateway tarball third):
 
 - **Files:** the Gateway tarball, read-only; a private home with `~/.config/JetBrains`, `~/.cache/JetBrains` (the per-version client distributions and the JetBrains Runtime land there) and `~/.local/share/JetBrains` writable and persistent; fonts, locale, CA certificates, resolver configuration.
-- **Sockets:** the Wayland socket and nothing else. No X11 socket (the HTML explains why), no D-Bus, no agent sockets. Without D-Bus, "open link" from the client does nothing; JetBrains already shows a confirmation dialog before opening any link on the client, and in this design the answer is no.
+- **Sockets:** the Wayland socket and nothing else. No X11 socket (any X client can log keystrokes and read other windows), no D-Bus, no agent sockets. With a second Unix user this takes more than one ACL: the Wayland socket lives in the real user's runtime directory, so `gw` needs traversal of that directory, and traversal exposes every world-writable socket at its top level. On the rehearsal desk those were D-Bus, PipeWire, systemd's user manager and the snap session agent (the keyring and agent sockets were safe only because their subdirectories are mode 0700). `gw-run` therefore adds an explicit empty ACL entry for `gw` on every other entry in the directory, which outranks the "other" bits. It covers what exists when it runs; a socket created later is reachable until the next run, which is the one structural advantage of the Bubblewrap route, where only the socket is bound in. The canary's runtime-directory probe measures this. Without D-Bus, "open link" from the client does nothing; JetBrains already shows a confirmation dialog before opening any link on the client, and in this design the answer is no.
 - **Secrets:** one SSH private key that opens only the backend VMs, kept in the sandbox home, and the JetBrains account token. The host agent is not visible. SSH agent forwarding is a checkbox under Settings, Tools, SSH Forwarding; the documentation describes it as something you select, which reads as opt-in, but the default is not stated, so verify it is off and keep it off. Keep `ForwardAgent` out of the sandbox's own `ssh_config`.
 - **Egress:** the VM subnet, and the JetBrains hosts that serve the client, the runtime and the license check. The FAQ says "both remote server and local computer, or only the local one, must have a network connection" to "a list of JetBrains URLs". Take the exact list from the first test's proxy or firewall logs rather than guessing. With a second Unix user this is a few `nftables` rules keyed on the UID.
-- **One client home per trust zone.** If a hostile backend installs a client-side plugin, it persists in that home and would meet the next backend you connect to from it. Give each zone its own sandbox home (or its own Unix user) and reset it when the zone's VMs are retired.
+- **Two client homes.** If a hostile backend installs a client-side plugin, it persists in that client home and would meet the next backend you connect to from it. Use one client user for your own per-project VMs and a second one for disposable VMs, and reset the second one's home after each use.
 - **GPU:** not needed. The JetBrains Wayland toolkit renders in software by default (my understanding; the test confirms it).
-- **Embedded Chromium:** JetBrains apps embed Chromium (JCEF) for some panels. Chromium's own sandbox cannot nest inside Bubblewrap, which is why the Flathub IntelliJ sets `ide.browser.jcef.sandbox.enable=false` in its `idea.properties`. A client under Bubblewrap needs the same property; a client running as a second Unix user does not.
+- **Embedded Chromium:** JetBrains apps embed Chromium (JCEF) for panels such as the Markdown preview, and in Remote Development that browser runs on the client, rendering content that comes from the backend, which is to say from the repository under test. Two things stand between it and a Wayland-only sandbox, both met on 9 October. First, JCEF runs on X11 even when the client itself draws on Wayland: with no X display it logs `Missing X server or $DISPLAY` and the browser never starts. So `gw-run` gives `gw` a private rootless Xwayland on `:9`, itself only a Wayland client of the compositor through the same borrowed socket, started with an authorization cookie that only `gw`'s processes receive, and sets `DISPLAY` and `XAUTHORITY` for the client; the host's X sockets stay closed, and the toolkit option still picks Wayland for the client's own windows. Second, Chromium's sandbox needs an unprivileged user namespace, which Ubuntu (24.04 and later) grants only to programs under an AppArmor profile; the client tests this by running `unshare` from its own process and otherwise shows a dialog offering to install a profile or to disable the sandbox. A profile on the Chromium helper alone does not satisfy that test. The desk cloud-init therefore writes `/etc/apparmor.d/jetbrains-client` with profiles attached to the client launcher, the helper and Gateway's JVM, Ubuntu's own shape for Chrome, which children inherit (verified: under such a profile the client's check passes and the helper can create PID and network namespaces). The dialog's own install button cannot work from inside `gw`, which has no route to root. "Disable sandbox" would run Chromium unsandboxed inside `gw`, which the threat model tolerates, since `gw` holds little, but it drops a layer that costs one file. Under Bubblewrap the sandbox cannot nest at all, which is why the Flathub IntelliJ sets `ide.browser.jcef.sandbox.enable=false`.
 - **Three meanings of "home" in this document.** They are easy to confuse and the difference is the whole point of the client sandbox.
   1. *A fresh home.* The second-user, Bubblewrap and ai-jail routes give the client a home directory that is a different directory from yours. Your real home does not exist in its view. This is the model the client sandbox uses.
   2. *A Flatpak home.* Flatpak keeps `HOME` pointing at your real home path but redirects the app's config, data and cache directories to `~/.var/app/<id>/`. Whether the app can see the rest of your real home depends on the manifest: with `--filesystem=home` it can, without it the real home is simply absent. The Flathub IntelliJ grants it; a manifest you write for the Gateway tarball would not.
@@ -166,7 +163,8 @@ A checklist for whichever mechanism carries the client (second user first, Bubbl
   1. Gateway downloads the backend from JetBrains into the VM. Needs VM egress to the JetBrains download hosts, at least for the install.
   2. Pre-install the backend in the VM base image and register it with `remote-dev-server.sh registerBackendLocationForGateway`. No download egress needed. **This is the route for cloned and disposable VMs**, and it keeps every clone on one known version.
   3. The air-gapped route: a self-hosted mirror of backends, clients and runtime, built with JetBrains' client downloader, with `productsInfoUrl`, `clientDownloadUrl`, `jreDownloadUrl` and `pgpPublicKeyUrl` set in `~/.config/JetBrains/RemoteDev/`. Overkill for one person, but it is how to keep the client sandbox's egress to a host you control.
-- **Also in the VM:** toolchains, `uv` and friends, Claude Code, the project checkout, and either a per-project deploy key or fine-grained token or, as deferred work, nothing at all with a credential-injecting proxy on the host. Backend plugins are installed with `remote-dev-server installPlugins`, which needs Marketplace access, so install them in the base image.
+- **Also in the VM:** the everyday tools (`uv`, `mise`, `direnv`, `just`, `ripgrep`, `jq`, build essentials, a JDK), with language toolchains installed per project by `mise` from the repository's `.mise.toml`, Claude Code, the project checkout (cloned by the VM itself at first boot, 4.8), an `ssh_config` with `IdentityAgent none` so nothing in the VM asks the client for keys (4.5), and either a per-project deploy key or fine-grained token or, as deferred work, nothing at all with a credential-injecting proxy on the host. Backend plugins are installed with `remote-dev-server installPlugins`, which needs Marketplace access, so install them in the base image. The Claude Code plugin belongs here: Anthropic's documentation says that under Remote Development it must be installed on the host, not the client, and it only launches the `claude` binary already in the VM. Its Marketplace id is `com.anthropic.code.plugin` ("Claude Code [Beta]" by Anthropic PBC; the Marketplace search also returns several look-alikes by other vendors), so the base image gets `remote-dev-server.sh installPlugins com.anthropic.code.plugin`. The plugin's client half arrives in the client sandbox through the backend, the path the design already allows for. A plugin installed from the client's settings dialog is only staged on both sides until each process restarts, and the backend does not restart when the client reconnects: `remote-dev-server` keeps running the project across client sessions. So after "Install on Frontend and Backend", close the client window and answer Yes when it asks whether to stop the backend (the same thing as `pkill --signal TERM --full remote-dev-server` as `dev`), then reconnect from Gateway; both halves install on that start (found 9 October).
+- **The agent's credential:** what Claude Code holds inside the VM is the one secret the threat table asks to keep small. A full `claude` login in the VM stores a claude.ai OAuth credential that can also reach claude.ai connectors and Remote Control, and its browser callback lands on a random localhost port in the VM, which a browser on the host cannot reach (seen 9 October). The better fit is a token minted on the host with `claude setup-token`, where the SSO session already is, placed in the VM as `CLAUDE_CODE_OAUTH_TOKEN` (for example in the `env` block of `/home/dev/.claude/settings.json`, mode 0600): Anthropic documents it as able only to make model requests, with no connectors and no Remote Control, which is exactly the narrowing wanted. It lives a year and nothing documents revoking it short of the account's own controls, so treat it like the deploy key: one per VM, noted, and rotated when the VM goes. Where the organisation has the Claude Console, a per-VM API key with a spend limit is the equivalent with revocation built in.
 - **State:** indexes and caches live in the VM. A persistent per-project VM keeps them. A disposable VM re-indexes on every use, which is minutes for a large project and seconds for a small one.
 
 ### 4.5 The security model, read for this design
@@ -177,13 +175,13 @@ From JetBrains' Remote Development security model page, with what each point mea
 - Port forwarding from the backend to the local machine is on by default ("if the key is absent, the setting is considered true by default") and can be disabled per user or system-wide on the host side with flag files or registry keys. Reverse forwarding, local to remote, persists across reconnects and needs an explicit Allow; JetBrains says to use it "only with servers or individuals you fully trust". **Here the backend is the untrusted side.** Keep forward port forwarding for reaching a dev server, never allow a reverse forward, and consider disabling forwarding on the backend side for VMs that do not need it.
 - Clipboard content "is sent to the backend only at the moment of paste" and the backend "can change the clipboard only during the actual copy". **Better than the raw Wayland socket**, where a focused app can read the clipboard at will.
 - Link opening goes to the client with a confirmation dialog. **In a sandbox without D-Bus it cannot open anything anyway.**
-- Plugins: see 4.1. **The client is extensible from the backend; one client home per zone limits the spread.**
-- SSH agent forwarding: opt-in checkbox; keep it off (4.3).
+- Plugins: see 4.1. **The client is extensible from the backend; a separate client home for disposable VMs limits the spread.**
+- SSH agent forwarding: opt-in checkbox; keep it off (4.3). Its backend half runs regardless: when git on the backend needs SSH, the IDE hands it an agent socket that proxies to the client, and OpenSSH asks any agent about its configured identity even with `IdentitiesOnly yes`; that query alone makes the client show "Provide SSH Key Access", offering the only key it has, `vm_ed25519` (seen 9 October). The answer is on the backend: `IdentityAgent none` in `dev`'s `ssh_config`, so OpenSSH never consults an agent and the deploy key is used from its file. Never answer that dialog by copying a key to the client; the client is meant to hold no GitHub key.
 - Telemetry follows the IDE's rules and is off by default in release builds.
 
 ### 4.6 The display question: Wayland in the thin client
 
-This was the one open technical risk on the client side. It is now settled for the client by the builds JetBrains ships, with one line needed for the Gateway launcher. JetBrains made native Wayland the default in the IDEs in 2026.1 through a launcher option, `-Dawt.toolkit.name=auto`, which picks the Wayland toolkit when a Wayland connection succeeds and X11 otherwise. The February 2026 announcement added: "Wayland support for Remote Development mode is currently a work in progress. In the meantime, Remote Development mode will continue to operate as before and not enable native Wayland support automatically." That described 2026.1. On 8 October the last 2026.1 client, the current 2026.2 client and the current Gateway launcher were downloaded from JetBrains and compared:
+This was the one open technical risk on the client side. It is now settled: by the builds JetBrains ships, and since 9 October by the rehearsal, where both the 2026.2.3 client and the 2026.2.2 launcher with its one added line report `sun.awt.wl.WLToolkit` under GNOME. JetBrains made native Wayland the default in the IDEs in 2026.1 through a launcher option, `-Dawt.toolkit.name=auto`, which picks the Wayland toolkit when a Wayland connection succeeds and X11 otherwise. The February 2026 announcement added: "Wayland support for Remote Development mode is currently a work in progress. In the meantime, Remote Development mode will continue to operate as before and not enable native Wayland support automatically." That described 2026.1. On 8 October the last 2026.1 client, the current 2026.2 client and the current Gateway launcher were downloaded from JetBrains and compared:
 
 | | 2026.1 client (build 261.27258.48) | 2026.2.3 client (build 262.10968.63, 16 September 2026) | Gateway 2026.2.2 launcher (build 262.10315.114, 3 September 2026) |
 |---|---|---|---|
@@ -197,24 +195,24 @@ What follows:
 
 1. **Add one line for the Gateway launcher.** Gateway 2026.2.2 ships no toolkit option, so unless the runtime's own default has changed, its window starts on X11 and fails in the sandbox. Add `-Dawt.toolkit.name=auto` to `bin/gateway64.vmoptions` in the sandbox copy before the first launch; JetBrains says the manual option keeps working. The client, once launched, needs nothing.
 2. **Pin backends to 2026.2 or later.** The client version always matches the backend, so a 2026.1 backend pulls a 2026.1 client that still defaults to X11.
-3. **Keep the private Xwayland as the fallback only.** `xwayland-run` starts one X11 program on its own rootful Xwayland server, which is itself only a Wayland client of the host compositor, so the host X11 socket is never shared. The cost: the program lives inside one host window and the clipboard needs bridging with `wl-clipboard`. Packaged in Debian 13 and Fedora. Needed only for an older backend you cannot upgrade, or for the Toolbox App (4.2).
+3. **A private Xwayland is needed anyway, for the embedded browser.** The client's own windows are Wayland, but JCEF is X11-only, so `gw-run` starts a rootless `Xwayland` for `gw`, itself only a Wayland client of the host compositor through the borrowed socket; the host X11 socket is never shared and the client's windows stay native (4.3). For a whole program that needs X11, such as an older client or the Toolbox App (4.2), `xwayland-run` does the same with a rootful server, at the cost of the program living inside one host window and the clipboard needing `wl-clipboard`. Packaged in Debian 13, Fedora and Ubuntu 26.04 (`xwayland-run` 0.0.5; the `desk` cloud-init installs it).
 4. **Never share the host X11 socket.** Any X client can log keystrokes and read other windows.
 
 The custom VM options file for the client is `jetbrains_client64.vmoptions` in the client distribution's `bin` directory under the sandbox home, should anything ever need forcing there.
 
-### 4.7 VM topology: per zone, per project, or disposable
+### 4.7 VM topology: per project and disposable
 
-| | Per trust zone | Per project, persistent | Disposable |
-|---|---|---|---|
-| What it is | Two or three long-lived VMs: personal open source, client work, scratch | One VM per repository, cloned from a base image that already has the backend and toolchains | A clone of the same base image, used once and destroyed |
-| Isolation | Between zones only; projects in a zone share a kernel and a home | Between projects | Strongest per task |
-| Credential scope | Per-project tokens are still possible but live side by side | One deploy key or token per VM, so per project by construction | None, or a read-only token |
-| Memory on a 64 GB host | Three VMs at 8 GB, always on | Four or five running at once; stop the rest | Transient |
-| Indexes and caches | Built once per zone, shared | Built once per project, kept | Rebuilt every time |
-| Operations | Manual | `incus copy base proj-x`, `incus snapshot` before risky updates, a cloud-init key per VM | `incus copy base tmp`, use, `incus delete -f tmp` |
-| Fits | Daily work with low friction | Ongoing projects with different trust levels | Stranger code, one-off reviews, trying a dependency upgrade before adopting it |
+| | Per project, persistent | Disposable |
+|---|---|---|
+| What it is | One VM per repository, created from a base image that already has the backend and toolchains | A VM from the same base image, used once and destroyed |
+| Isolation | Between projects | Strongest per task |
+| Credential scope | One deploy key or token per VM, so per project by construction | None, or a read-only token |
+| Memory on a 64 GB host | Four or five running at once; stop the rest | Transient |
+| Indexes and caches | Built once per project, kept | Rebuilt every time |
+| Operations | `incus launch devenv-base proj-x --vm`, `incus snapshot` before risky updates, a cloud-init key per VM | `incus launch devenv-base tmp-x --vm`, use, `incus delete -f tmp-x` |
+| Fits | Ongoing projects with different trust levels | Stranger code, one-off reviews, trying a dependency upgrade before adopting it |
 
-Recommendation: **per-project persistent VMs cloned from one base image, plus disposable clones of the same image for stranger code.** Per zone is the fallback if per-project turns out heavier than expected in practice; the mechanics are identical, only the number of VMs differs.
+Both come from one base image, so the mechanics are identical; only the lifetime and the credentials differ. A VM shared by several projects of similar trust was considered and dropped on 8 October: it saves memory, but it puts projects of different provenance in one kernel and one home, and with 64 GB the saving is not needed.
 
 Incus is the natural manager here: it is already installed on the Mac and in use against the `router26a` remote, it runs VMs with `--vm`, it has snapshots, copies, cloud-init for injecting the client's SSH public key, per-instance network ACLs for the egress allowlist, and a `.incus` DNS zone so Gateway can address a VM by name instead of an address that changes per clone. libvirt with virt-manager is the alternative and has the more direct path to a vsock device.
 
@@ -224,21 +222,365 @@ Details that follow from cloning:
 - Gateway's recent-connections list fills with dead disposable VMs. Harmless.
 - Pre-install the backend and the backend plugins in the base image (4.4, route 2) so a clone needs no egress at all to start working.
 
-### 4.8 How to test it
+### 4.8 Start-up: how a project gets opened
 
-In the rehearsal on the Mac, before the Framework arrives: VM A is an Ubuntu 26.04 desktop with GNOME on Wayland playing the host; VM B is an Ubuntu 26.04 server playing the backend, with the IntelliJ backend installed from the tarball and registered.
+The short version: you never start the JetBrains Client yourself; Gateway starts it. You point Gateway at a VM through an `ssh_config` entry in the client sandbox, Gateway logs in with the sandbox's own key, starts the backend inside the VM, and the backend hands back a one-time link that Gateway feeds to the client. The repository is cloned inside the VM, by the VM, with a key that exists only there.
 
-1. On VM A, create user `gw`, grant it the Wayland socket with `setfacl`, unpack the Gateway tarball in its home, add the toolkit line from 4.6 to its VM options, generate an SSH key there, and put the public key in VM B. Run Gateway as `gw` and connect to VM B.
-2. Check the toolkit in Help, About, first in the Gateway window and then in the client; with a 2026.2 backend expect the Wayland toolkit in both. If the launcher reports X11, check its VM options line; if the client does, check the backend version. The private Xwayland in 4.6 is the fallback for either.
-3. Run the canary (section 6) inside the client sandbox and inside the backend VM.
-4. Work in it for a real session: a JVM project and a Python project, terminal, run and debug, a dev server through a forwarded port, Claude Code in the backend terminal, the plugins you depend on.
-5. In the client, confirm SSH agent forwarding is off; in the backend terminal, confirm `ssh-add -l` finds no agent and `git push` over SSH fails without the deploy key.
-6. Measure: backend RAM at rest and while indexing, time to first index for each project, time from `incus copy` to a connected client.
-7. Clone VM B, connect to the clone, delete it, and confirm nothing in the client home changed besides the recent-connections list.
+**Where each secret lives:**
+
+| Secret | Lives in | Opens |
+|---|---|---|
+| `vm_ed25519`, the client sandbox's SSH key | `~/.ssh` of the `gw` user, the client sandbox. In the rehearsal the Mac also keeps it as `rehearsal/utm/keys/gw_ed25519`, where it doubles as the rig key for SSH checks into both VMs. | SSH as `dev` into every backend VM. Its public key is injected by cloud-init when a VM is created. |
+| JetBrains account sign-in | `gw`'s home | The license check on connect |
+| Deploy key (or a fine-grained token) | `~/.ssh` of `dev` inside one VM | One repository on GitHub, read-only or read-write. Generated in the VM at first boot; its public key is added to the repository from the host with `gh repo deploy-key add`. |
+| 1Password agent, router keys, your `gh` token | The host, your own user | Nothing in this picture. No process in the sandbox or in a VM can reach them. |
+
+**Provisioning, from base image to a VM with the project in it:**
+
+```mermaid
+flowchart TD
+  subgraph once["Once: the base image"]
+    A["Ubuntu cloud image"] --> B["cloud-init: user dev, sshd hardening, tools (uv, mise, gh),<br/>IDE backend unpacked, registered, Claude Code plugin installed,<br/>git identity, GitHub host keys, Claude Code"]
+    B --> C["incus publish: image devenv-base"]
+  end
+  subgraph per["Per project"]
+    C --> D["incus launch devenv-base proj-foo --vm<br/>per-VM cloud-init: gw's public key, repository URL,<br/>Claude Code token (optional)"]
+    D --> E["First boot: generate the deploy key,<br/>print its public key on the console"]
+    E --> F["On the host: gh repo deploy-key add -R owner/foo"]
+    F --> G["In the VM, as dev: git clone over SSH<br/>with the deploy key"]
+    G --> H["Ready: /home/dev/foo"]
+  end
+  subgraph disp["Disposable"]
+    C --> I["incus launch devenv-base tmp-x --vm<br/>no deploy key: clone over HTTPS, or copy the archive in"]
+    I --> J["Use, then incus delete -f tmp-x"]
+  end
+```
+
+The base image is built from the same cloud-init file that provisions the rehearsal's `backend` VM (4.9), so what is tested on the Mac is what the Framework runs.
+
+**Opening the project, every time:**
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor You as You (host session)
+  participant GW as gw-run, gw-session,<br/>Gateway launcher (user gw)
+  participant XW as Xwayland :9<br/>(user gw, cookie)
+  participant SSHD as sshd in proj-foo<br/>(user dev)
+  participant BE as IDE backend in proj-foo<br/>(remote-dev-server.sh)
+  participant JB as JetBrains download hosts
+  participant CL as JetBrains Client<br/>and its Chromium (user gw)
+
+  You->>GW: gw-run lends the Wayland socket to gw, closes every other socket, becomes gw
+  GW->>XW: gw-session starts the private X server with a fresh cookie, then Gateway
+  You->>GW: pick the connection proj-foo, pre-provisioned in gw's settings
+  GW->>SSHD: SSH as dev with vm_ed25519, no agent
+  SSHD-->>GW: host key checked against gw's known_hosts
+  GW->>BE: find the registered backend, start it on /home/dev/foo
+  BE-->>GW: join link: local port, one-time token, certificate fingerprint
+  GW->>JB: fetch the JetBrains Client matching the backend build (once per version, then cached)
+  GW->>CL: launch with the join link, DISPLAY and XAUTHORITY inherited
+  CL->>BE: TLS 1.3 inside an SSH port forward, token presented, fingerprint verified
+  CL->>XW: Chromium's browser and GPU processes attach for previews
+  BE-->>CL: project model, indexes, terminal, run and debug
+  CL-->>You: IDE window on the Wayland socket
+```
+
+Notes on the sequence:
+
+- Steps 1 and 2 are `gw-run`: the ACL on the Wayland socket, the empty ACL entries on everything else in the runtime directory, then `gw-session` as `gw`, which starts Xwayland with an authorization cookie in `gw`'s home and hands over to the Gateway launcher. The X server stays up between runs and is reused.
+- Step 3 is one click on the first run as well, because the desk cloud-init writes the connection into Gateway's settings exactly as Gateway itself stored it. Without that, it is the "New connection, SSH" dialog once, with "Parse config file ~/.ssh/config" so the host, user and key come from `gw`'s `ssh_config`.
+- Step 6 is why the backend is pre-installed and registered in the base image: Gateway finds it and downloads nothing into the VM. A VM created from the image needs no egress at all to open a project.
+- Steps 7 and 9: the join link is the credential. JetBrains documents starting the backend by hand with `remote-dev-server.sh run /home/dev/foo --ssh-link-host <vm> --ssh-link-user dev`, which prints the same link in three forms, including `jetbrains-gateway://connect#...`, to paste into Gateway's "Connect to a Running IDE" field. That is the scriptable route for later: a `devenv open foo` script could start the VM, run that command over SSH and hand the link to Gateway. Whether the launcher takes the link as a command-line argument is unverified (Open questions).
+- Step 8 is the one place the client sandbox needs egress beyond the VM subnet: the JetBrains download hosts, plus the account hosts for the license check. Once per backend version; the client is cached afterwards. A Linux aarch64 client build exists, so the rehearsal on the Mac downloads the same way the Framework will.
+- Step 11: the client's own windows are Wayland; only the embedded Chromium uses the X server, and only `gw`'s processes hold the cookie (4.3).
+- The repository never passes through the client. The client shows the backend's view of the files over the protocol; the files live in the VM.
+
+**What runs where, in one picture, including the embedded browser:**
+
+```mermaid
+flowchart LR
+  subgraph host["Host: your own user"]
+    comp["Wayland compositor"]
+    hx["Host X servers X0, X1"]
+    op["1Password agent, browser, gh, router keys"]
+  end
+  subgraph gw["Client sandbox: user gw, three AppArmor profiles"]
+    gwl["Gateway launcher"]
+    cl["JetBrains Client (JVM)"]
+    cef["cef_server: Chromium browser process<br/>(JCEF remote mode, forced to X11)"]
+    ren["cef_server children: zygote, GPU, renderers<br/>(Chromium sandbox: seccomp and namespaces)"]
+    xw["Xwayland :9, rootless<br/>gw's own X server, only gw's windows"]
+    k1[("vm_ed25519, JetBrains sign-in")]
+  end
+  subgraph vm["Backend VM proj-foo: user dev"]
+    sshd["sshd"]
+    be["IDE backend"]
+    tools["toolchain, Claude Code, project files"]
+    k2[("deploy key for one repository")]
+  end
+  github[("github.com")]
+  comp -- "Wayland socket, ACL" --> gwl
+  comp -- "Wayland socket, ACL" --> cl
+  comp -- "Wayland socket, ACL" --> xw
+  cl -- "spawns, IPC" --> cef
+  cef -- "spawns, IPC" --> ren
+  cef -- "X11 on /tmp/.X11-unix/X9<br/>(browser and GPU processes)" --> xw
+  gwl -- "SSH with vm_ed25519" --> sshd
+  cl -- "TLS inside the SSH forward" --> be
+  be -. "preview content from the project:<br/>HTML, images, scripts" .-> ren
+  sshd --> be --> tools
+  tools -- "git over SSH with the deploy key" --> github
+  op x--x gw
+  hx x--x gw
+```
+
+**Does the embedded browser widen the exposure between backend and desk?** Not between them. The only link between the two VMs is still the SSH tunnel, the backend still reaches no socket on desk, and desk's new X server listens on no port. What widens is the attack surface inside the client sandbox, and one allowance on the kernel the sandbox shares with you. Point by point:
+
+- **A new consumer of backend content.** The Markdown preview hands HTML, images and scripts from the project to a Chromium renderer, so a hostile repository now gets to exercise a browser engine in the client sandbox, in addition to the IDE's own parsers. The renderer is the most attacked parser there is, and the most hardened.
+- **Where a renderer exploit lands.** Renderers run in Chromium's sandbox (seccomp plus user, PID and network namespaces), which is what the AppArmor profiles preserve: one renderer bug yields a process that can open neither files nor sockets. A second bug, a sandbox escape, yields code running as `gw`, with the VM key, the JetBrains sign-in and a Wayland connection that offers no capture, clipboard-manager or input-injection globals (canary). That is exactly the position the design already assumed for a compromised JetBrains Client, so the blast radius is unchanged; the probability of reaching it rises by Chromium's share of the surface. The browser process and the JVM sit outside Chromium's sandbox, as in any browser. All Chromium process types run from `cef_server` here and inherit the client launcher's profile; the separate profile on `jcef_helper` is unused by this build and harmless.
+- **X11 itself adds nothing to snoop.** The protocol runs only between `gw`'s processes and `gw`'s own Xwayland over a socket in `/tmp`. X11's known weakness, that every client of a server can read every other client's keystrokes and windows, has no victims here: the only clients of `:9` are Chromium's processes, and the host's X servers stay closed to `gw`. Xwayland is one more Wayland client of the compositor with the same rights as the client. Two small points remain. The socket file in `/tmp` is world-writable, but the server demands a cookie that lives in `gw`'s home, so another local user cannot connect (verified 9 October: a connection without the cookie is refused). And Chromium is forced onto X11 by JetBrains (`--ozone-platform=x11`), so this is not a temporary accommodation.
+- **The kernel allowance is the real cost.** Processes under the three profiles may create user namespaces, which Ubuntu denies to unconfined programs because namespace code is a recurring source of kernel bugs. After a sandbox escape, a `gw`-level attacker can therefore ask more of the kernel it shares with you; on the Framework that is the host kernel. The allowance is limited to the JetBrains binaries and to `gw`, and it is the price of keeping Chromium's sandbox: "Disable sandbox" would remove the first barrier to avoid widening the second. The backend VM's kernel is not involved.
+- **Network.** A page planted in a README can make the browser fetch from anywhere, like any browser. That is why the client sandbox's egress allowlist (4.3) must cover `gw` as a whole; on the Framework it will, and Chromium then reaches the JetBrains hosts and the VM subnet and nothing else. The rehearsal desk has no per-user egress rule yet.
+
+### 4.9 The rehearsal rig on the Mac
+
+Before the Framework arrives, the design is rehearsed in two Ubuntu 26.04 VMs on the current Mac. VM `desk` plays the Framework host: GNOME on Wayland, the client sandbox as user `gw`, and the egress allowlist. VM `backend` plays a per-project VM: the IntelliJ backend installed from the tarball and registered, a `dev` user, and a deploy key.
+
+**The Mac can run it.** Checked on 8 October; no macOS upgrade is needed.
+
+| | Found | Needed |
+|---|---|---|
+| macOS and chip | 15.8.1 (Sequoia) on an Apple M4, 10 cores, 32 GB | UTM's Apple Virtualization backend runs Linux guests on macOS 12 or later. Nested virtualization, which an Incus-inside-a-VM rehearsal would need, is on automatically in UTM 4.6.2 and later on M3 and newer chips with macOS 15. |
+| Hypervisor | `kern.hv_support` is 1 | Required by every VM tool |
+| Disk | 611 GB free | About 20 GB: the cloud image, two raw disks and the seeds |
+| UTM | Not installed | `brew install --cask utm` (4.7.5 on 8 October), or the DMG from the UTM site; the App Store copy only adds automatic updates |
+| `qemu-img` | Not installed | `brew install qemu`, used once to convert the cloud image to raw; the Apple backend accepts raw disk images only |
+| Memory plan | | `desk` 8 GB, `backend` 8 GB, 16 GB left for macOS; four vCPUs each |
+
+**Building the two VMs from cloud-init.** The files are in this repository under `rehearsal/utm/`: a `user-data` template, `meta-data` and `network-config` per VM; `make-seed.sh`, which generates the `gw` key pair once, renders the templates and writes the two NoCloud seed ISOs with `hdiutil`; and `create-vms.sh`, which registers the VMs in UTM. The disk is Ubuntu's stock server cloud image, `ubuntu-26.04-server-cloudimg-arm64.img` (serial 20260927, 902 MB; QCOW2 despite the name). There is no desktop cloud image, so `desk` installs `ubuntu-desktop-minimal` through cloud-init, which takes a while on first boot.
+
+What each file sets up:
+
+- `desk`: user `jsw` with a password for the GDM login (`rehearsal`, unless `DESK_PASSWORD` was set when running `make-seed.sh`; the rendered value is in `build/desk-seed/user-data`), passwordless sudo and the rig key authorized for SSH checks from the Mac; `spice-vdagent` for clipboard sharing with the Mac, which also needs UTM's clipboard setting on, something the script does since the scripting interface cannot; user `gw` with no sudo and no password, lingering enabled so it has a runtime directory, the Gateway 2026.2.2 tarball unpacked in its home with the toolkit line from 4.6 added, the `vm_ed25519` key and an `ssh_config` that knows only `backend`; `/usr/local/bin/gw-run`, which lends the session's Wayland socket to `gw` with `setfacl`, closes the other sockets in the runtime directory and becomes `gw` to run `gw-session`, which starts a private Xwayland with an authorization cookie for the embedded browser and then Gateway; and `gw-exec`, which runs any command with the same environment. None of them uses a login shell: `sudo --login` passes its command through `bash -c`, which expands every `$variable` before the target user runs it (found 9 October); the AppArmor profiles for the client's Chromium; the canary; an `nftables` allowlist for the backend, written but not enabled; IP forwarding on. Reboots into GNOME when done.
+- `backend`: user `dev` whose only login is `gw`'s public key; sshd with passwords and agent forwarding off, and an `ssh_config` that never consults an agent; the IntelliJ IDEA Ultimate 2026.2.3 tarball under `/opt/jetbrains/idea`, registered with `registerBackendLocationForGateway`, with the Claude Code plugin installed into it; a JDK, Python, build tools, `uv`, `mise`, `direnv`, `just`, `ripgrep`, `jq` and `gh` from GitHub's repository; GitHub's SSH host keys; a git identity copied from the Mac's; a deploy key generated at first boot and printed on the console; Claude Code with its settings, carrying the token from `keys/claude_oauth_token` when that file exists; the canary. The architecture is detected, so the same file serves the arm64 VMs on the Mac and, as the base image's cloud-init, the x86-64 VMs on the Framework.
+- Both: a static address on UTM's shared network, `desk` at 192.168.64.10 and `backend` at 192.168.64.20, so the `ssh_config` entry and the allowlist can name them, plus a host route to the other VM through the Mac (192.168.64.1). The route is needed because UTM's shared network marks each VM's port on the Mac's bridge "private", which blocks traffic between VMs at layer 2 while the Mac itself can reach both and forwards between them (found 9 October: `desk` could not ARP for `backend`). The interface is named exactly, `enp0s1`, and the renderer is pinned to systemd-networkd. Both come from the first `desk`, which came up on a DHCP address twice (9 October): the desktop install brings NetworkManager and makes it netplan's default renderer, NetworkManager does not accept a glob such as `en*`, and even with the exact name it never applied the static profile, because Ubuntu 26.04's dracut initramfs leaves a catch-all DHCP rule in `/run/systemd/network` that systemd-networkd, still enabled, acts on first; NetworkManager then treats the NIC as externally configured. With the networkd renderer, netplan's own `10-netplan-enp0s1.network` sorts ahead of that rule, which is why `backend` never had the problem.
+
+**On the Mac.** Each command is preceded by what it does. Long option names are used wherever the tool has them; macOS ships BSD `mkdir`, `rm` and `ssh-keygen`, which have none, and `qemu-img` has none for its format flags.
+
+```sh
+# Install UTM, the hypervisor front end, and QEMU, needed only for qemu-img,
+# which converts the cloud image to the raw format UTM's Apple backend accepts.
+brew install --cask utm
+brew install qemu
+
+# Work inside the rehearsal directory of this repository.
+cd rehearsal/utm
+
+# Fetch Ubuntu's stock 26.04 arm64 server cloud image (902 MB). The file is
+# QCOW2 despite its .img name.
+curl --location --remote-name https://cloud-images.ubuntu.com/releases/26.04/release/ubuntu-26.04-server-cloudimg-arm64.img
+
+# Optional: a Claude Code token for the backend, minted here where the SSO
+# session is, so the VM never sees a login flow (4.4). Paste the token printed by
+# "claude setup-token" into keys/claude_oauth_token (gitignored) before building.
+claude setup-token
+
+# Generate the client sandbox's key pair (once, kept in keys/), render the two
+# cloud-init templates, and build the NoCloud seed ISOs under build/. The git
+# identity for commits inside the VM is read from this Mac's git config.
+./make-seed.sh
+
+# Convert the cloud image into one raw disk per VM. In qemu-img, -f is the
+# source format and -O the output format; there is no long form.
+qemu-img convert -f qcow2 -O raw ubuntu-26.04-server-cloudimg-arm64.img build/desk.raw
+qemu-img convert -f qcow2 -O raw ubuntu-26.04-server-cloudimg-arm64.img build/backend.raw
+
+# Grow each disk to 40 GB. The file stays sparse on APFS; cloud-init grows the
+# partition and filesystem on first boot.
+qemu-img resize -f raw build/desk.raw 40G
+qemu-img resize -f raw build/backend.raw 40G
+
+# Register both VMs in UTM from the raw disks and seed ISOs: Apple backend,
+# four cores, 8 GB, one shared network, a serial console, and a display for
+# desk. UTM copies each disk and seed into its own bundle, so build/ stays
+# pristine and needs no access grant.
+./create-vms.sh
+```
+
+`create-vms.sh` drives UTM's AppleScript interface through `osascript`. Its first version attached the seed as a removable drive, and the VM would not start: UTM is a sandboxed app, a removable drive is referenced by path, and a path handed over by script carries no access grant, so UTM reported "Cannot access resource" (8 October). The script now attaches the seed as a second non-removable drive, which UTM imports into the VM bundle just like the raw disk; cloud-init finds the seed by its `cidata` label on any block device, and the disk stays first so EFI boots from it. A second gap in the scripting interface: it cannot set the keyboard and pointer, and a scripted VM gets both "Disabled", so the first `desk` showed GNOME's greeter with no cursor and took no input (9 October). The script now sets `Keyboard` to Generic and `Pointer` to Mouse in the bundle's `config.plist` with `plutil`, then makes UTM re-read it: newer UTM versions have a reload command for exactly this case, 4.7.5 does not, so the script quits and relaunches UTM, which re-reads every bundle. Run it with no VM running. No step in the UTM window is needed. Verified on 8 October: `backend` booted, took its static address, and reported `DataSourceNoCloud [seed=/dev/vdb]` with no errors, the IDE backend registered and the deploy key generated, about three minutes after `utmctl start`. If the script fails outright, do the whole thing in the UTM window: create a Linux VM with Apple Virtualization, four cores and 8 GB; in its drive settings remove the blank disk the wizard made, import the raw image as the disk, and add the seed ISO as a removable drive; leave the network on Shared; give `backend` a serial device and `desk` a display, and check under Virtualization that `desk` has a keyboard and a pointer.
+
+**Running the rig.** `utmctl` is UTM's command-line tool; the Homebrew cask links it into `/opt/homebrew/bin`. VMs are addressed by name.
+
+```sh
+# List every VM UTM knows, with its status.
+utmctl list
+
+# Status of one VM: stopped, starting, started, paused or stopping.
+utmctl status backend
+
+# First boot of backend. utmctl starts it headless: nothing opens in UTM's
+# window, and utmctl attach is not implemented in UTM 4.7.5. Reachability
+# (ping, then SSH below) is the quickest sign of life; the seed sets the
+# static address early in boot.
+utmctl start backend
+ping -c 2 192.168.64.20
+
+# Optional console: the Apple backend's serial port is a pseudo-terminal on the
+# Mac. Ask UTM for its path, then open it with screen (quit with ctrl-a k).
+osascript -e 'tell application "UTM" to get address of first serial port of virtual machine named "backend"'
+screen /dev/ttys009
+
+# First boot of desk: its window opens in UTM. cloud-init installs the desktop,
+# then reboots into the GDM login by itself; expect ten minutes or more.
+utmctl start desk
+
+# Check on either VM from the Mac with the rig key (jsw on desk, dev on backend).
+# cloud-init reports done when provisioning finished; desk also shows its GDM
+# session. ssh has no long options.
+ssh -o IdentitiesOnly=yes -i keys/gw_ed25519 jsw@192.168.64.10 'cloud-init status; loginctl list-sessions'
+ssh -o IdentitiesOnly=yes -i keys/gw_ed25519 dev@192.168.64.20 'cloud-init status'
+
+# Fetch backend's deploy key using the client sandbox's key, which the Mac holds
+# in keys/ because it was generated there, and register it on the test
+# repository. Read-only unless --allow-write is added. ssh has no long options.
+ssh -o IdentitiesOnly=yes -i keys/gw_ed25519 dev@192.168.64.20 'cat ~/.ssh/deploy_ed25519.pub' > build/backend-deploy.pub
+gh repo deploy-key add build/backend-deploy.pub --repo owner/test-repo --title backend-vm
+
+# Optional, on the Mac: a stanza for ~/.ssh/config.d/ (or above "Host *" in
+# ~/.ssh/config, since the first match wins) that neither records nor verifies
+# host keys for the rehearsal VMs, whose keys change on every rebuild, and that
+# supplies the rig key, so the -o and -i flags above can be dropped.
+#
+#   Host 192.168.64.*
+#       StrictHostKeyChecking no
+#       UserKnownHostsFile /dev/null
+#       GlobalKnownHostsFile /dev/null
+#       LogLevel ERROR
+#       IdentityFile ~/proj/ide_sandbox/sandboxed_devenv/rehearsal/utm/keys/gw_ed25519
+#       IdentitiesOnly yes
+#       ForwardAgent no
+
+# Stop a VM. --request asks the guest to shut down cleanly, which is what you
+# want; --force, UTM's default, pulls the plug; --kill terminates the process.
+# A request can take minutes if a systemd stop job is waiting on its timeout;
+# "sudo systemctl poweroff" over SSH is the same thing with the console visible.
+utmctl stop backend --request
+utmctl stop desk --request
+
+# Step 8: a throwaway copy of backend. Stop backend first, since the clone keeps
+# its address. Delete is immediate and unconfirmed.
+utmctl clone backend --name backend-tmp
+utmctl start backend-tmp
+utmctl stop backend-tmp --request
+utmctl delete backend-tmp
+```
+
+**Fresh VMs.** The VMs are disposable by design; replacing them costs a few minutes plus the first-boot provisioning.
+
+```sh
+# Stop and delete both VMs. The disks UTM copied go with them; build/ still
+# holds the pristine raw images and the seeds.
+utmctl stop desk --request
+utmctl stop backend --request
+utmctl delete desk
+utmctl delete backend
+
+# Only if a template or a version changed: rebuild the seeds. keys/ is reused,
+# so backend's authorized key stays the same. Rebuilding never touches an
+# existing VM, since each VM holds its own copy of the seed.
+./make-seed.sh
+
+# Register fresh VMs from the pristine raw disks and the seeds.
+./create-vms.sh
+
+# To re-run cloud-init inside an existing VM instead (seed ISO still attached):
+#   sudo cloud-init clean --logs --reboot
+```
+
+**Clean-up.** When the rehearsal is over.
+
+```sh
+# Stop and delete the VMs. No confirmation.
+utmctl stop desk --request
+utmctl stop backend --request
+utmctl delete desk
+utmctl delete backend
+
+# Revoke the deploy key on the test repository.
+gh repo deploy-key list --repo owner/test-repo
+gh repo deploy-key delete <key-id> --repo owner/test-repo
+
+# Remove the generated key pair, seeds and raw disks (all gitignored) and the
+# downloaded cloud image. BSD rm has no long options.
+rm -r keys build
+rm ubuntu-26.04-server-cloudimg-arm64.img
+
+# Forget the VMs' SSH host keys, which the Mac learned when fetching the deploy key.
+ssh-keygen -R 192.168.64.10
+ssh-keygen -R 192.168.64.20
+
+# Optional: remove the tools. --zap also removes UTM's data directory under
+# ~/Library/Containers, where the VM bundles lived.
+brew uninstall --cask --zap utm
+brew uninstall qemu
+```
+
+**The network:**
+
+```mermaid
+flowchart LR
+  inet(("Internet"))
+  gh["github.com"]
+  jb["JetBrains download and account hosts"]
+  rt["SOHO router<br/>192.168.0.1, NAT"]
+  subgraph mac["MacBook Air, macOS 15.8"]
+    en0["en0 192.168.0.130"]
+    vmnet["vmnet shared network, bridge100<br/>192.168.64.1: NAT, DHCP, DNS"]
+    subgraph utm["UTM, Apple Virtualization"]
+      desk["desk 192.168.64.10<br/>GNOME on Wayland, user gw with Gateway and Client,<br/>nftables allowlist and NAT for backend"]
+      be["backend 192.168.64.20<br/>IDE backend, toolchain, deploy key<br/>default route via desk from step 7"]
+    end
+  end
+  desk -- "SSH 22 as dev, forwarded by the Mac" --> be
+  be -. "egress, forwarded only to the allowlist" .-> desk
+  desk --> vmnet
+  vmnet --> en0 --> rt --> inet
+  inet --> gh
+  inet --> jb
+```
+
+How it maps to the Framework: `desk` is the host, the shared network is Incus's bridge, and the `nftables` table written on `desk` moves to the host unchanged apart from the interface name. Three differences are worth knowing. The VMs cannot talk to each other directly on UTM's shared network (the bridge ports are private), so every packet between `desk` and `backend` is forwarded by the Mac through the host routes above; on the Framework the client sandbox and the VMs share the host directly. Step 7 lifts the isolation with `sudo ifconfig bridge100 -private vmenet0 vmenet1`, which lasts until a VM restarts, because routing `backend` through `desk` needs them adjacent. On the Mac both VMs sit on the same shared network, so `backend` could switch its default route back to 192.168.64.1 and bypass the allowlist; that is accepted for a functional rehearsal and does not exist on the Framework, where a VM's only path out is through the host. And the shared network's gateway answers DNS for `backend` directly, so names resolve even when the allowlist drops the address. If a faithful egress test matters before the Framework, UTM's QEMU backend offers a host-only network with no path out, at the cost of a slower VM.
+
+**Steps in the rig:**
+
+1. **Launch and connect.** Log in to `desk` as `jsw` and confirm the session is Wayland (`echo $XDG_SESSION_TYPE`). Once, accept `backend`'s host key for `gw`: `sudo -u gw -i ssh backend true`. Then `gw-run`. In the Gateway window: New connection, SSH, username `dev`, host 192.168.64.20, key pair `/home/gw/.ssh/vm_ed25519`; Gateway finds the registered backend and asks for a project directory. It downloads the matching JetBrains Client and opens the IDE window. Passed on 9 October; the connection Gateway stored is now part of the desk template, so a fresh `desk` has it already.
+2. **Toolkit.** Check Help, About, first in the Gateway window and then in the client; with a 2026.2 backend expect the Wayland toolkit in both. If the launcher reports X11, check its VM options line; if the client does, check the backend version. The private Xwayland in 4.6 is the fallback for either. Passed on 9 October: the client's About dialog reports `Toolkit: sun.awt.wl.WLToolkit` on GNOME Shell 50.1, and the launcher's `idea.log` records the same toolkit at start-up.
+3. **Canary.** On desk, as `jsw`, after `gw-run` has run in the session: `gw-exec canary --role client`. On backend, as `dev`: `canary --role backend`. Expect no FAIL lines; INFO lines are the measurements. Section 6 lists the probes and what each PASS means. Passed on 9 October in both roles, after the first run exposed the runtime-directory sockets that `gw-run` now closes (4.3): on desk, `gw` can read none of `jsw`'s secrets, reaches only the Wayland socket in `jsw`'s runtime directory, cannot connect to either X11 socket or `jsw`'s D-Bus, and has no GitHub key; on backend, GitHub answers with the test repository's name, so the deploy key is in place.
+4. **A real session.** A JVM project and a Python project, terminal, run and debug, a dev server through a forwarded port, Claude Code in the backend terminal, the plugins you depend on. Any project will do: a public repository cloned over HTTPS in the backend terminal needs no key at all; pushing needs the deploy key registered on a test repository (run block above). Started on 9 October: the project opens, the deploy key clones its one repository and nothing else, and the Markdown preview renders once the embedded browser has its private X server and its AppArmor profiles (4.3). Claude Code runs in the backend through the plugin, authenticated by a `setup-token` minted on the Mac and placed in the VM's settings (4.4); `/status` reports the token as the credential. One trap met on the way: an invalid `settings.json` (a missing comma) is ignored silently, and Claude Code then asks for a login as if no credential existed.
+5. **Forwarding and keys.** In the client, confirm SSH agent forwarding is off. In the backend terminal, confirm `ssh-add -l` finds no agent, that `ssh -T git@github.com` greets with the test repository's name (the deploy key, as the canary's INFO line also shows), that `git push` to that repository works, and that nothing else on GitHub is reachable with it.
+6. **Measure.** Backend RAM at rest and while indexing, time to first index for each project, time from VM start to a connected client.
+7. **Egress.** First, on the Mac, lift the isolation between the two VMs for the duration of the test: `sudo ifconfig bridge100 -private vmenet0 vmenet1` (member names from `ifconfig bridge100`; it resets when a VM restarts). A default route through `desk` needs `desk` reachable at layer 2, and the host routes of 4.9 do not make a gateway reachable. Then on `desk`, `sudo systemctl enable --now nftables`. On `backend`, change the default route in `/etc/netplan/50-cloud-init.yaml` to 192.168.64.10 and run `sudo netplan apply`. Confirm with `canary --role backend --deny example.com` that GitHub is reachable and the rest is dropped and logged on `desk`, and that the IDE session is unaffected, since it never leaves the shared network.
+8. **Disposable.** Clone `backend` with `utmctl` (commands above), connect to the clone from the same Gateway, delete the clone, and confirm nothing in `gw`'s home changed besides the recent-connections list.
 
 If the client fails steps 1 and 2 and the private Xwayland is unacceptable, the fallback is the `waypipe` row in section 3: the full IDE in the VM with windows forwarded, which trades the thin client's limits for `waypipe`'s.
 
-## 5. Credentials: what is on the Mac today
+**Manual steps from the rehearsal, to automate later.** Everything below was done by hand on the live VMs on 9 October. Items marked (templated) are already produced by the cloud-init files or `create-vms.sh` for fresh VMs; the rest still need a script, most naturally a `devenv new <repo>` command on the host.
+
+1. Register the backend's deploy key on the repository: fetch the public key over SSH with the rig key, then `gh repo deploy-key add` on the host. Not templated; the natural first step of `devenv new`.
+2. Install the Claude Code plugin on the backend. Done from the client's Plugins dialog ("Install on Frontend and Backend"), which stages both halves and needs the backend stopped (close the client, answer Yes to stopping the backend) and reconnected. Templated since the evening of 9 October: the backend cloud-init runs `remote-dev-server.sh installPlugins` for it, so a fresh backend has it before the first connection.
+3. Give Claude Code its credential. `claude setup-token` on the host, pasted into the `env` block of `/home/dev/.claude/settings.json`, file mode 0600. Templated since the evening of 9 October: `make-seed.sh` writes that file from `keys/claude_oauth_token` when present. Open question below: one token for all VMs or one per VM.
+4. The tool set on backend (`uv`, `mise`, `direnv`, `just`, `ripgrep`, `fd`, `jq`, `gh`, `pkg-config`, `libssl-dev`) and the `mise` and `direnv` hooks in `dev`'s `.bashrc` (templated since 9 October). Per-project secrets are a separate matter: rpkilog's `.envrc` on the Mac holds live cloud credentials and is gitignored, so it is absent from the VM's clone, which is right; a VM gets scoped equivalents, never the host's file.
+5. Gateway's SSH connection to the backend, accepted host key, `jsw`'s authorized key on desk, the inter-VM host routes, the networkd renderer, the exact NIC name (templated).
+6. Keyboard, pointer and clipboard sharing in the UTM configuration, `spice-vdagent` (templated, in `create-vms.sh` and the desk cloud-init).
+7. The deny ACLs on the runtime directory, the private Xwayland, the AppArmor profiles, `gw-session`, pinned `LANG`, no login shell (templated, in `gw-run`, `gw-exec`, `gw-session` and `/etc/apparmor.d/jetbrains-client`).
+8. The canary on both VMs and `gw-exec` (templated).
+
+**Troubleshooting notes from the rehearsal.** A VM started by `utmctl` shows nothing in UTM's window; check with ping and SSH. A desk that comes up on a DHCP address has lost the renderer or NIC-name fix (4.9). Chromium needs the private X server; if the preview is blank, check that `Xwayland :9` runs as `gw`. A Claude Code login prompt despite a configured token means `settings.json` is not valid JSON; it is ignored silently. A login started in the backend opens a callback port in the VM that the host's browser cannot reach; the token route avoids it. Snap noise in the `gw-run` terminal comes from something opening the Firefox snap as `gw`, which cannot use the borrowed socket, and is harmless. A plugin installed from the client stays staged until the backend is stopped and restarted. `sudo --login` expands `$variables` before the target user runs the command; never use it in the `gw` scripts.
+
+## 5. Credentials on the host: findings and a hardening plan
+
+This section is hardening, not a prerequisite. The rehearsal and the Framework build mint their own keys: the client sandbox's key is generated by `make-seed.sh`, each VM generates its own deploy key at first boot, and the host's agent, keys and `gh` token are never copied anywhere (4.8). The one rule that applies from day one is never to SSH into a VM with agent forwarding on; the Mac's `ssh_config` enables it for named hosts only, never under `Host *`, so a plain `ssh dev@192.168.64.20` does not forward (checked with `ssh -G` on 8 October). The findings below decide how bad a compromise of the host itself would be, which is worth fixing once the rig works.
 
 Read on 7 October from the local configuration, not from key material.
 
@@ -258,51 +600,72 @@ Plan, independent of which sandbox wins:
 
 ## 6. The canary check
 
-One script, run inside every candidate (the client sandbox and the backend VM alike), reporting pass or fail per probe. It turns the effort estimates in the HTML into measurements.
+One script, `rehearsal/canary.py`, run as the principal under test inside every candidate. It prints PASS, FAIL or INFO per probe and exits non-zero on any FAIL, so it turns effort estimates into measurements. The cloud-init files install it as `/usr/local/bin/canary` on both VMs; desk also gets `gw-exec`, which runs one command as `gw` with the display environment that `gw-run` gives Gateway. Standard library only, no root.
 
-- Read `~/.ssh`, `~/.config/gh`, `~/.config/1Password` of the real user.
-- List keys through any agent socket in the environment or under the runtime directory, then try SSH to `github.com`.
-- Reach one allowed hostname and one blocked hostname, by name and by IP.
-- Open the X11 socket.
-- List Wayland globals and flag screen-capture or clipboard-manager protocols.
-- Talk to the session D-Bus.
-- Open `/dev/dri`.
-- Read the clipboard while another window has focus.
-- Write to `.git/hooks` and to a shell rc file in the home it sees.
-- Report the kernel it is on (`uname -r`), the user ID, and the namespaces in `/proc/self/ns`.
+```sh
+# On desk, as jsw, from the GNOME session or over SSH, after gw-run has lent the
+# socket to gw in that session. Judged as the client sandbox.
+gw-exec canary --role client
+
+# On backend, as dev. Judged as the backend VM.
+canary --role backend
+
+# Once egress control is on (4.9 step 7), name a host that must be blocked.
+canary --role backend --allow github.com --deny example.com
+```
+
+| Probe | How | PASS means |
+|---|---|---|
+| Real user's secrets | List and read `~/.ssh`, `~/.config/gh`, `~/.config/1Password` and `~/.config/JetBrains` of the real user: the owner of the Wayland socket, or `--host-home`. A backend VM has no real user, so this and the two probes below are skipped there unless `--host-home` is given | Permission denied, or absent |
+| Agent sockets | Every agent socket in the environment, the runtime directory, `/tmp` and the 1Password paths, each asked with `ssh-add -l` | None visible, or none offers keys |
+| SSH client config | `ssh -G github.com` | Backend: `IdentityAgent none` and `ForwardAgent no`, so nothing in the VM can ask the client for keys (4.5). Client: `ForwardAgent no` |
+| SSH to github.com | `ssh -T git@github.com` without prompts | Client: denied. Backend: INFO naming what it authenticated as, which should be the deploy key's repository |
+| Egress | TCP 443 to each `--allow` host by name, to each `--deny` host by name, and to `--deny-ip` (default 1.1.1.1) by address | Allowed hosts connect, denied ones do not |
+| X11 | An unauthenticated connection setup to every socket under `/tmp/.X11-unix` | No socket, or the server refuses it |
+| Wayland | Connect to `WAYLAND_DISPLAY` and read the registry | Client: answers, with no globals for screen capture, clipboard managers, input injection or window control. Backend: no socket |
+| Real user's runtime directory | Connect to every known socket under `/run/user/<uid>` of the real user (D-Bus, PipeWire, PulseAudio, keyring, GnuPG, SSH agents, systemd, snap, Docker, Podman) and traverse its subdirectories | Only the Wayland socket is reachable; everything else is closed |
+| D-Bus | A SASL EXTERNAL handshake followed by `Hello` on the real user's session bus, since `dbus-daemon` answers OK to a foreign uid and only then goes silent; the principal's own bus and the system bus are INFO | The real user's bus does not answer `Hello` |
+| `/dev/dri` | Open each node read-write | None openable; INFO if the GPU is reachable, which the client does not need |
+| Clipboard | `wl-paste` with no focus arranged | INFO only: Wayland hands the selection to a client that has or briefly takes focus, so this shows what a careless client could read |
+| Writes | A hook in a scratch repository, and the shell rc files in the principal's own home | INFO only; a per-command sandbox such as `srt` would block these (Deferred work) |
+| Identity | User, host, kernel, virtualization, and whether the PID, network, mount, user, IPC and UTS namespaces differ from PID 1's | INFO |
 
 ## 7. Decision
 
 Two paths. A third, sandboxing only Claude Code on the Mac as an interim measure, was considered and dropped; it is recorded under Abandoned ideas.
 
-**Path 1: JetBrains Gateway with a sandboxed client and VM backends on the Framework.** Per-project VMs cloned from a base image, disposable clones for stranger code, the client as a second Unix user with only the Wayland socket, and NAT plus an allowlist for egress. The agent layer and the credential-injecting proxy are deferred work. Effort: two to three days spread over the first weeks with the laptop, after one day of rehearsal in VMs on the Mac. This is the recommended end state. The display path is settled for 2026.2 clients and needs one VM options line for the Gateway launcher (4.6); the remaining unknown is whether the thin client's feature set is acceptable day to day, and the rehearsal settles it. The credential plan in section 5 is a prerequisite under any path, because it decides how bad a compromise is.
+**Path 1: JetBrains Gateway with a sandboxed client and VM backends on the Framework.** Per-project VMs cloned from a base image, disposable clones for stranger code, the client as a second Unix user with only the Wayland socket, and NAT plus an allowlist for egress. The agent layer and the credential-injecting proxy are deferred work. Effort: two to three days spread over the first weeks with the laptop, after one day of rehearsal in VMs on the Mac. This is the recommended end state. The display path is settled for 2026.2 clients and needs one VM options line for the Gateway launcher (4.6); the remaining unknown is whether the thin client's feature set is acceptable day to day, and the rehearsal settles it. The credential plan in section 5 is hardening that applies under any path; it is not a prerequisite, because the rehearsal and the build mint their own keys and never expose the host's.
 
 **Path 2: Qubes OS.** The same model as a finished operating system, at the cost of GPU acceleration and of hardware support on a laptop this new. Not recommended now; revisit if the Framework appears on the Qubes hardware list.
 
-Recommendation: rehearse Path 1 on the Mac before the Framework ships, apply the credential plan alongside, and build Path 1 on the Framework. The rehearsal costs one day and removes most of the unknowns: whether the client runs under a second user on Wayland, and whether its feature set is acceptable for daily work.
+Recommendation: rehearse Path 1 on the Mac before the Framework ships, build Path 1 on the Framework, and apply the credential plan once the rig works. The rehearsal costs one day and removes most of the unknowns: whether the client runs under a second user on Wayland, and whether its feature set is acceptable for daily work.
 
 ## 8. Next steps, in order
 
 | Step | What | Effort (estimate) | Decides |
 |---|---|---|---|
-| 1 | Apply the credential plan in section 5 | 2 to 3 hours | Nothing; it is needed under every design |
-| 2 | Write the canary script | 1 to 2 hours | The yardstick for everything after |
-| 3 | Two Ubuntu 26.04 VMs under UTM: a GNOME-on-Wayland "host" and a server "backend" with the IntelliJ backend pre-installed and registered | 2 hours | The rehearsal rig |
-| 4 | Gateway as a second user on the "host" VM, connected to the "backend" VM; steps 1 to 3 of section 4.8 | Half a day | Whether the second-user socket sharing works on GNOME, and that the client comes up on the Wayland toolkit |
-| 5 | A real working session through it; steps 4 to 6 of section 4.8 | Half a day | Whether the thin client is acceptable. If not, try `waypipe` from the backend VM. |
-| 6 | Egress: NAT plus an allowlist keyed on the VM's interface; per-project deploy key inside the VM | 2 hours | Baseline egress control |
-| 7 | On the Framework: Incus VMs from one base image, one per project; disposable clones; the client user with per-UID firewall rules | 1 day | The working setup |
+| 1 | Write the canary script (`rehearsal/canary.py`, done 9 October) | 1 to 2 hours | The yardstick for everything after |
+| 2 | The rehearsal rig: UTM and `qemu` on the Mac, the two VMs from the cloud-init files in `rehearsal/utm/` (4.9), a deploy key on a test repository | 1 to 2 hours, mostly downloads | The rig |
+| 3 | Gateway as `gw` on `desk`, connected to `backend`; steps 1 to 3 of 4.9 | Half a day | Whether the second-user socket sharing works on GNOME, and that the client comes up on the Wayland toolkit |
+| 4 | A real working session; steps 4 to 6 of 4.9 | Half a day | Whether the thin client is acceptable. If not, try `waypipe` from the backend VM. |
+| 5 | Egress and disposal; steps 7 and 8 of 4.9 | 1 to 2 hours | Baseline egress control, and the rules that move to the Framework |
+| 6 | On the Framework: Incus VMs from one base image built with the `backend` cloud-init, one per project; disposable clones; the `gw` user with per-UID firewall rules | 1 day | The working setup |
+| 7 | Nice to have, once the above works: the credential plan in section 5 | 2 to 3 hours | How bad a compromise of the host itself would be; independent of the sandbox |
 
-Steps 1 and 2 can start today. Steps 3 to 6 do not need the Framework.
+Steps 1 to 5 can start today and do not need the Framework. Status on 9 October, evening: steps 1 to 3 are done and step 4 is well under way (two projects open, previews, Claude Code and `uv` working); steps 5 to 8 remain, and the templates have been improved enough that the clean rebuild should come before step 8.
+
+GitHub access for the rehearsal is a deploy key generated inside `backend` and added to one test repository, read-only unless you want to push from the VM. A fine-grained personal access token limited to that repository, with Contents read and write and a short expiry, is the HTTPS equivalent. Either is minted for the VM, revoked with it, and never touches the host's token or keys, which is why step 7 can wait.
 
 ## Open questions carried forward
 
-- Does GNOME's Mutter or KDE's KWin accept a Wayland connection from a second UID with only an ACL on the socket? (Reports exist for Sway.)
+- Does KDE's KWin accept a Wayland connection from a second UID with only an ACL on the socket? (GNOME's Mutter does; verified 9 October. Reports exist for Sway.)
 - If the second-user route fails, does a local Flatpak manifest around the Gateway tarball run the client cleanly, and does the compositor apply the security context to it?
-- The 2026.2.3 client ships `-Dawt.toolkit.name=auto`. Does it come up cleanly on the Wayland toolkit under GNOME and KDE in practice, and which of the documented Wayland rough edges show up in the client?
-- Does the Gateway 2026.2 launcher come up on Wayland once `-Dawt.toolkit.name=auto` is added to its VM options?
+- The 2026.2.3 client comes up on the Wayland toolkit under GNOME (verified 9 October). Does it under KDE, and which of the documented Wayland rough edges show up in a working session?
+- Does `gateway.sh` accept a `jetbrains-gateway://` link as a command-line argument? JetBrains documents the link for browsers and for pasting into Gateway; if the launcher takes it, opening a project becomes one script (4.8).
 - Launcher triggers (4.2): has Gateway stopped shipping, or has the Toolbox App gained native Wayland? Either reopens the choice of launcher.
 - Which Remote Development features and plugins that matter to you are missing or broken in the current client?
+- Where do cloud and service CLIs live, and with what credentials? rpkilog and packetcount need `aws`, Linode's CLI, Terraform and similar. Two placements are possible: per project, declared in the repository (`uv` tool or dev dependencies, or `.mise.toml`), so each VM installs only what its project uses; or baked onto the backend image for everything. The tooling decision is the easy half; the credentials are the hard one, since each VM must get scoped, revocable equivalents of what `.envrc` holds on the Mac (4.9, to-automate list). `gh` is installed on the backend since 9 October from GitHub's own apt repository (the template carries GitHub's signing keys inline; the 2022 key expired on 5 September 2026 and a 2026 key signs the repository now, so the block needs refreshing when GitHub rotates again) and without credentials, for the same reason: its token model (a personal token or the device flow) is a per-VM credential decision not yet made.
+- One Claude Code token for all backend VMs, or one per VM? A `setup-token` can only make model requests, lives a year, and nothing documents revoking one on its own, so per-VM tokens buy little revocation granularity today; one token per trust level (own projects, disposable VMs) may be the practical split. Decide once the Console or claude.ai offers per-token revocation, or if a per-VM API key with a spend limit becomes available.
 - Is the SSH agent forwarding checkbox off by default in a fresh client? The documentation reads as opt-in but does not say.
 - Is Intel's SR-IOV GPU virtualization for Panther Lake in the Ubuntu 26.04 kernel? If so, the whole-IDE-in-VM variant becomes attractive.
 
@@ -322,7 +685,7 @@ When to pick it up: once a backend VM is in daily use and the agent's commands a
 
 ### A credential-injecting egress proxy for the backend VM
 
-`srt proxy` runs `srt`'s HTTP proxy alone, "for a host that runs the workload elsewhere (a VM, a container, another sandbox)". It accepts on a socket the host hands it, terminates every CONNECT, refuses opaque tunnels, and forwards a request only when a separate decider process allows it. The decider can attach a credential to an allowed request, so a fine-grained GitHub token lives on the host and is added to requests to `github.com` from a VM that never sees it. That answers two open questions from the HTML at once: outbound control by name, and per-project credentials without a chore. The costs: you write the decider (a small program speaking a documented framed-JSON protocol), the VM must trust the proxy's CA, and Git must use HTTPS remotes because SSH cannot pass.
+`srt proxy` runs `srt`'s HTTP proxy alone, "for a host that runs the workload elsewhere (a VM, a container, another sandbox)". It accepts on a socket the host hands it, terminates every CONNECT, refuses opaque tunnels, and forwards a request only when a separate decider process allows it. The decider can attach a credential to an allowed request, so a fine-grained GitHub token lives on the host and is added to requests to `github.com` from a VM that never sees it. That answers two questions at once: outbound control by name, and per-project credentials without a chore. The costs: you write the decider (a small program speaking a documented framed-JSON protocol), the VM must trust the proxy's CA, and Git must use HTTPS remotes because SSH cannot pass.
 
 The purest form is a VM with no network interface at all, reached over vsock, with the proxy as its only way out. `ssh` can use a `ProxyCommand` through `socat` to a vsock port and Gateway can read `~/.ssh/config`, but whether Gateway's own SSH implementation honours `ProxyCommand` is untested; the Toolbox App runs the OpenSSH binary, so there it would.
 
@@ -366,4 +729,17 @@ Building blocks (7 October):
 - [waypipe manual](https://manpages.debian.org/unstable/waypipe/waypipe.1.en.html) and its [vsock merge request](https://gitlab.freedesktop.org/mstoeckl/waypipe/-/merge_requests/16)
 - [flatpak-override manual](https://www.man7.org/linux/man-pages/man1/flatpak-override.1.html) and the [Flathub IntelliJ IDEA Community packaging](https://github.com/flathub/com.jetbrains.IntelliJ-IDEA-Community)
 - [Ubuntu certification, Framework Laptop 13 Pro](https://ubuntu.com/certified/platforms/15849) and [Phoronix on its shipping delay](https://www.phoronix.com/news/Framework-13-Pro-July)
-- Everything cited in `ide_sandboxing.html` for the threat, the vendors' remote-development security notes, Wayland and graphics, the distributions, and the three tools compared there
+
+Rehearsal rig (8 October):
+
+- UTM: [Apple Virtualization network settings](https://docs.getutm.app/settings-apple/devices/network/) (Shared and Bridged only), [Apple Virtualization drive settings](https://docs.getutm.app/settings-apple/drive) (raw images only), [the Ubuntu guide](https://docs.getutm.app/guides/ubuntu/), release notes [4.6.0](https://github.com/utmapp/UTM/releases/tag/v4.6.0) and [4.6.2](https://github.com/utmapp/UTM/releases/tag/v4.6.2) (nested virtualization on M3 and later with macOS 15), [UTM for Mac](https://mac.getutm.app/)
+- [Ubuntu 26.04 LTS cloud images](https://cloud-images.ubuntu.com/releases/26.04/release/) (serial 20260927) and the [cloud-init NoCloud datasource](https://cloudinit.readthedocs.io/en/latest/reference/datasources/nocloud.html)
+- [GitHub meta API](https://api.github.com/meta) for the allowlist's address ranges; [deploy keys](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/managing-deploy-keys) and [fine-grained personal access tokens](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
+- The Mac itself: `sw_vers`, `sysctl kern.hv_support`, `ssh -G`; and HEAD requests confirming the aarch64 Linux tarballs of Gateway 2026.2.2, IntelliJ IDEA Ultimate 2026.2.3 and JetBrains Client 262.10968.63 on download.jetbrains.com
+
+Threat and background (7 October):
+
+- IDE-borne attacks on developers: [GitLab on Contagious Interview](https://about.gitlab.com/blog/how-to-detect-and-prevent-contagious-interview-ide-attacks/), [Atlassian's write-up](https://www.atlassian.com/blog/how-we-build/disrupting-contagious-interview), [OpenSourceMalware on the VS Code variant](https://opensourcemalware.com/blog/contagious-interview-vscode) and [the fake font variant](https://opensourcemalware.com/blog/dprk-contagious-interview-campaign-fake-font-uses-malicious-vs-code-fonts), [VS Code tasks as an infection chain](https://nhimg.org/articles/vs-code-tasks-files-let-attackers-trigger-developer-infection-chains/), [Calif on abusing developer trust](https://blog.calif.io/p/vibe-hacking-abusing-developer-trust)
+- Credential sharing in remote development: [VS Code dev containers share Git credentials and forward the agent](https://code.visualstudio.com/remote/advancedcontainers/sharing-git-credentials), vscode-remote-release issues [9897](https://github.com/microsoft/vscode-remote-release/issues/9897) and [9466](https://github.com/microsoft/vscode-remote-release/issues/9466), [JetBrains dev container overview](https://www.jetbrains.com/help/idea/connect-to-devcontainer.html)
+- Sandboxing mechanisms: [Bubblewrap](https://github.com/containers/bubblewrap) and its [Arch wiki page](https://wiki.archlinux.org/title/Bubblewrap), [Molodetskikh's Bubblewrap script for IntelliJ](https://chat.macaw.me/community/news.movim.eu/PlanetGnome/urn-uuid-aa27255b-d219-5783-9d9d-a8c2943ed2a2), [Breitner's sandboxed development setup](https://bilder.joachim-breitner.de/blog/812-Convenient_sandboxed_development_environment), [ai-jail](https://github.com/akitaonrails/ai-jail) and [its author's write-up](https://akitaonrails.com/en/2026/01/10/ai-agents-locking-down-your-system/), [jailbee](https://github.com/VRTFinland/jailbee) and [its security page](https://jailbee.gisgro.io/docs/security/), [code-on-incus](https://github.com/mensfeld/code-on-incus/wiki/Architecture-and-Security-Model), [Fedora: Toolbx is not a sandbox](https://docs.fedoraproject.org/en-US/atomic-desktops/toolbox/), [Ubuntu's AppArmor user-namespace restriction](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007) and [its bug](https://bugs.launchpad.net/bugs/2035315), [Qubes OS](https://www.qubes-os.org/)
+- Wayland and graphics: [security-context-v1](https://wayland.app/protocols/security-context-v1), [Flatpak releases](https://github.com/flatpak/flatpak/releases), [Flathub VS Code](https://github.com/flathub/com.visualstudio.code), Phoronix on Intel SR-IOV for [Panther Lake](https://www.phoronix.com/news/Intel-SR-IOV-PTL-ARL-State), [the VFIO Xe driver](https://www.phoronix.com/news/Intel-VFIO-Xe-PCI-Driver-Linux) and [Xe in 6.17](https://www.phoronix.com/news/Intel-Xe-Linux-6.17-PF-4K)

@@ -1,0 +1,276 @@
+#cloud-config
+# desk: plays the Framework host in the rehearsal (ide_sandboxing_summary.md, 4.9).
+# GNOME on Wayland, the client sandbox as a second Unix user (gw), and the
+# egress allowlist for the backend VM. make-seed.sh fills the placeholder fields.
+
+hostname: desk
+manage_etc_hosts: true
+package_update: true
+packages:
+  - ubuntu-desktop-minimal
+  - acl
+  - nftables
+  - wl-clipboard
+  - xwayland-run
+  # Authorization cookies for gw's private X server.
+  - xauth
+  # Clipboard sharing with the Mac over UTM's SPICE agent port (create-vms.sh turns it on).
+  - spice-vdagent
+  - curl
+  - ca-certificates
+
+users:
+  # Plays "you" on the host: logs in to GNOME, runs gw-run. Has sudo.
+  - name: jsw
+    gecos: Host user
+    groups: [adm, sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: false
+    plain_text_passwd: "@@DESK_PASSWORD@@"
+    # The rig key, kept on the Mac in keys/, so the Mac can SSH in for checks.
+    ssh_authorized_keys:
+      - @@GW_PUBKEY@@
+  # The client sandbox. No sudo, no password, no groups. Sees the Wayland
+  # socket only while gw-run has lent it, and its own home.
+  - name: gw
+    gecos: Gateway client sandbox
+    shell: /bin/bash
+    lock_passwd: true
+
+write_files:
+  - path: /home/gw/.ssh/vm_ed25519
+    owner: gw:gw
+    permissions: "0600"
+    defer: true
+    encoding: b64
+    content: @@GW_PRIVKEY_B64@@
+  - path: /home/gw/.ssh/vm_ed25519.pub
+    owner: gw:gw
+    permissions: "0644"
+    defer: true
+    content: |
+      @@GW_PUBKEY@@
+  - path: /home/gw/.ssh/config
+    owner: gw:gw
+    permissions: "0600"
+    defer: true
+    content: |
+      # The client sandbox knows the backend VMs and nothing else.
+      Host backend
+          HostName 192.168.64.20
+          User dev
+          IdentityFile ~/.ssh/vm_ed25519
+          IdentitiesOnly yes
+      Host *
+          ForwardAgent no
+          AddKeysToAgent no
+  # The SSH connection to backend, exactly as Gateway 2026.2 wrote it after the
+  # first connection was made in its window (9 October 2026), so a fresh desk
+  # starts with the connection present. The key path uses Gateway's own macro.
+  - path: /home/gw/.config/JetBrains/JetBrainsGateway@@GATEWAY_BRANCH@@/options/sshConfigs.xml
+    owner: gw:gw
+    permissions: "0600"
+    defer: true
+    content: |
+      <application>
+        <component name="SshConfigs">
+          <configs>
+            <sshConfig host="192.168.64.20" id="8c05b60b-188a-439b-861b-899cbb9fda27" keyPath="$USER_HOME$/.ssh/vm_ed25519" port="22" nameFormat="DESCRIPTIVE" username="dev" useOpenSSHConfig="true" />
+          </configs>
+        </component>
+      </application>
+  # The canary check (summary section 6), from rehearsal/canary.py.
+  - path: /usr/local/bin/canary
+    permissions: "0755"
+    encoding: b64
+    content: @@CANARY_B64@@
+  - path: /usr/local/bin/gw-exec
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # Run one command as gw with the display environment gw-run gives Gateway:
+      # jsw's Wayland socket, gw's own runtime directory, the private X display.
+      # Assumes gw-run has already lent the socket to gw in this session (the ACLs
+      # persist until logout). No login shell, for the reason given in gw-run.
+      #   gw-exec canary --role client
+      set -eu
+      sock="${XDG_RUNTIME_DIR:?not in a graphical session}/${WAYLAND_DISPLAY:-wayland-0}"
+      exec sudo --user=gw env --unset=XAUTHORITY \
+        HOME=/home/gw USER=gw LOGNAME=gw SHELL=/bin/bash LANG=C.UTF-8 \
+        WAYLAND_DISPLAY="$sock" \
+        XDG_RUNTIME_DIR="/run/user/$(id --user gw)" \
+        XDG_SESSION_TYPE=wayland \
+        DISPLAY=:9 XAUTHORITY=/home/gw/.Xauthority-gw \
+        "$@"
+  - path: /usr/local/bin/gw-run
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # Run as jsw inside the GNOME session. Lends the session's Wayland socket
+      # to gw (an ACL on the socket and on the runtime directory) and starts the
+      # Gateway launcher as gw. Nothing else of jsw's becomes visible to gw.
+      # Stop at the first failing command and on any unset variable.
+      set -eu
+
+      # Full path of this session's Wayland socket, normally /run/user/1000/wayland-0.
+      # Fails with a message if not run from inside a graphical session.
+      sock="${XDG_RUNTIME_DIR:?not in a graphical session}/${WAYLAND_DISPLAY:-wayland-0}"
+
+      # Let gw traverse jsw's runtime directory (mode 0700) so it can reach the
+      # socket path. Execute permission on a directory grants only lookup, not listing.
+      setfacl --modify u:gw:x "$XDG_RUNTIME_DIR"
+
+      # Let gw connect to the socket itself: read and write on the socket file.
+      setfacl --modify u:gw:rw "$sock"
+
+      # Everything else in the runtime directory stays closed to gw: D-Bus, PipeWire,
+      # systemd's user manager, the snap agent, and the keyring and agent sockets in
+      # their subdirectories. Several of those sockets are world-writable, so the
+      # traversal granted above would expose them; an explicit empty ACL entry for gw
+      # outranks the "other" bits. Only entries present now are covered: a socket
+      # created later is reachable until gw-run runs again (the canary checks).
+      # FUSE mounts such as doc/ and gvfs/ reject ACLs; they are mode 0500, so gw
+      # cannot enter them regardless, and the error is ignored.
+      for entry in "$XDG_RUNTIME_DIR"/* "$XDG_RUNTIME_DIR"/.[!.]*; do
+        [ -e "$entry" ] || continue
+        [ "$entry" = "$sock" ] && continue
+        setfacl --modify u:gw:- "$entry" 2>/dev/null || :
+      done
+
+      # Become gw and hand over to gw-session with the display environment set.
+      # WAYLAND_DISPLAY takes an absolute socket path, so the client finds jsw's
+      # compositor; the runtime directory and session type are gw's own; DISPLAY
+      # names the private X server gw-session starts for the embedded browser.
+      # XAUTHORITY is dropped because sudo passes jsw's through and it names
+      # Mutter's unreadable file. No login shell: sudo --login would pass this
+      # line through "bash -c", which expands every $variable before gw runs it
+      # (found 9 October: Xwayland got an empty display argument that way).
+      exec sudo --user=gw env --unset=XAUTHORITY \
+        HOME=/home/gw USER=gw LOGNAME=gw SHELL=/bin/bash LANG=C.UTF-8 \
+        WAYLAND_DISPLAY="$sock" \
+        XDG_RUNTIME_DIR="/run/user/$(id --user gw)" \
+        XDG_SESSION_TYPE=wayland \
+        DISPLAY=:9 \
+        /usr/local/bin/gw-session "$@"
+  - path: /usr/local/bin/gw-session
+    permissions: "0755"
+    content: |
+      #!/bin/sh
+      # Runs as gw, started by gw-run with the display environment already set.
+      # The client draws on Wayland, but its embedded Chromium (JCEF, used by
+      # Markdown previews) still needs an X display, so gw gets a private rootless
+      # Xwayland on $DISPLAY, itself only a Wayland client of jsw's compositor;
+      # the host X sockets stay closed. It stays up and is reused on the next run
+      # (an auto-terminate option once shut it between Chromium's first attempt
+      # and its retry). Then the Gateway launcher replaces this script.
+      set -eu
+      auth="$HOME/.Xauthority-gw"
+      if ! pgrep -u gw -x Xwayland >/dev/null; then
+        # A fresh cookie per server start: only processes handed XAUTHORITY can
+        # connect, so the world-writable socket in /tmp admits nobody else.
+        touch "$auth"; chmod 600 "$auth"
+        xauth -q -f "$auth" remove "$DISPLAY" 2>/dev/null || :
+        xauth -q -f "$auth" add "$DISPLAY" MIT-MAGIC-COOKIE-1 "$(mcookie)"
+        Xwayland "$DISPLAY" -rootless -auth "$auth" >/dev/null 2>&1 &
+        sleep 1
+      fi
+      export XAUTHORITY="$auth"
+      exec /home/gw/gateway/bin/gateway.sh "$@"
+  # Ubuntu restricts unprivileged user namespaces to confined programs, and the
+  # client's embedded Chromium (JCEF) needs one for its own sandbox. The client
+  # decides whether it may have one by running unshare from its own process, so
+  # the profiles attach to the launcher binaries: children (that test, the
+  # Chromium helper) inherit them. Same shape as Ubuntu's /etc/apparmor.d/chrome;
+  # the globs cover every client version Gateway downloads for gw. Loaded at boot.
+  - path: /etc/apparmor.d/jetbrains-client
+    permissions: "0644"
+    content: |
+      abi <abi/5.0>,
+      include <tunables/global>
+
+      profile jetbrains-client /home/gw/.cache/JetBrains/JetBrainsClientDist/**/bin/jetbrains_client flags=(unconfined) {
+        userns,
+        @{exec_path} mr,
+        include if exists <local/jetbrains-client>
+      }
+
+      # In JCEF's remote mode every Chromium process runs from cef_server and inherits
+      # the launcher's profile above; this one covers a build that execs the helper.
+      profile jetbrains-client-jcef /home/gw/.cache/JetBrains/JetBrainsClientDist/**/jcef_helper flags=(unconfined) {
+        userns,
+        @{exec_path} mr,
+        include if exists <local/jetbrains-client-jcef>
+      }
+
+      profile jetbrains-gateway /home/gw/gateway/jbr/bin/java flags=(unconfined) {
+        userns,
+        @{exec_path} mr,
+        include if exists <local/jetbrains-gateway>
+      }
+  - path: /etc/sysctl.d/99-vmrouter.conf
+    content: |
+      net.ipv4.ip_forward = 1
+  - path: /etc/nftables.conf
+    permissions: "0644"
+    content: |
+      #!/usr/sbin/nft -f
+      # Egress allowlist for the backend VM. Written now, enabled in step 7 of 4.9
+      # (systemctl enable --now nftables) once backend routes through desk.
+      # The same table moves to the Framework host; only the interface name changes.
+      flush ruleset
+
+      define backend = 192.168.64.20
+      # The four github.com "git" ranges from https://api.github.com/meta (read 8 October
+      # 2026); the API also lists per-region /32 hosts, add them if GitHub stops answering.
+      define github_v4 = { 140.82.112.0/20, 143.55.64.0/20, 185.199.108.0/22, 192.30.252.0/22 }
+
+      table inet vmrouter {
+        set allowed {
+          type ipv4_addr
+          flags interval
+          elements = $github_v4
+        }
+        chain forward {
+          type filter hook forward priority filter; policy drop;
+          ct state established,related accept
+          ip saddr $backend ip daddr @allowed tcp dport { 22, 443 } accept
+          ip saddr $backend log prefix "vmrouter drop: " drop
+        }
+        chain postrouting {
+          type nat hook postrouting priority srcnat; policy accept;
+          ip saddr $backend oifname "en*" masquerade
+        }
+      }
+
+runcmd:
+  # Give gw a user service manager and /run/user/<uid> at boot, without a login.
+  - loginctl enable-linger gw
+  # Unpack the Gateway launcher into gw's home, picking the tarball for this CPU.
+  - mkdir --parents /home/gw/gateway
+  - |
+    set -e
+    case "$(uname -m)" in
+      aarch64) url="https://download.jetbrains.com/idea/gateway/JetBrainsGateway-@@GATEWAY_VERSION@@-aarch64.tar.gz" ;;
+      *)       url="https://download.jetbrains.com/idea/gateway/JetBrainsGateway-@@GATEWAY_VERSION@@.tar.gz" ;;
+    esac
+    curl --fail --silent --show-error --location "$url" \
+      | tar --extract --gzip --strip-components=1 --directory=/home/gw/gateway
+    # Gateway 2026.2.2 ships no toolkit option; without this line it starts on X11.
+    grep --quiet 'awt.toolkit.name' /home/gw/gateway/bin/gateway64.vmoptions \
+      || echo '-Dawt.toolkit.name=auto' >> /home/gw/gateway/bin/gateway64.vmoptions
+    chown --recursive gw:gw /home/gw
+    chmod 700 /home/gw /home/gw/.ssh
+  # Load the client's AppArmor profile now; apparmor.service reloads it at boot.
+  - apparmor_parser --replace /etc/apparmor.d/jetbrains-client || true
+  # Apply the IP forwarding sysctl written above.
+  - sysctl --system
+  # The allowlist stays off until step 7 of 4.9.
+  - systemctl disable nftables
+  # Boot into GDM from now on.
+  - systemctl set-default graphical.target
+
+final_message: "desk: cloud-init finished after $UPTIME seconds, rebooting into GNOME"
+power_state:
+  mode: reboot
+  condition: true
