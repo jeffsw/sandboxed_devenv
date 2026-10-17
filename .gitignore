@@ -1,4 +1,7 @@
 .DS_Store
+__pycache__/
+.ruff_cache/
+node_modules/
 rehearsal/utm/build/
 rehearsal/utm/keys/
 rehearsal/utm/*.img
