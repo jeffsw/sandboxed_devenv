@@ -36,9 +36,9 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends cloud-init apparmor nftables
       - name: Set up mise (pinned shellcheck, ruff, yamllint, actionlint, uv, node)
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
       - name: Cache the Mermaid CLI and its browser
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.npm/_npx
@@ -59,9 +59,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Set up mise
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v5
       - name: Cache the Mermaid CLI and its browser
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.npm/_npx
