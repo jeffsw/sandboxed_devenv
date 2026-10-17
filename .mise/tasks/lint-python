@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+#MISE description="ruff + byte-compile of the canary, the seed renderer, the extraction helper and the python tasks"
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+files=(rehearsal/canary.py rehearsal/utm/render.py rehearsal/utm/extract-files.py)
+for t in .mise/tasks/*; do
+    if head -1 "$t" | grep -q python; then files+=("$t"); fi
+done
+# ruff lints the extensionless task files only when told they are python.
+ruff check --extension '':py "${files[@]}" 2>/dev/null || ruff check "${files[@]}"
+# Syntax check without writing .pyc files next to the sources.
+python3 -c 'import ast, sys
+for path in sys.argv[1:]:
+    ast.parse(open(path).read(), path)' "${files[@]}"
+echo "lint-python: ok (${#files[@]} files)"

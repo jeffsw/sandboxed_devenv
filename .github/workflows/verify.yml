@@ -1,0 +1,71 @@
+---
+name: verify
+
+"on":
+  push:
+  pull_request:
+    branches: [main]
+    types:
+      - opened
+      - ready_for_review
+      - reopened
+      - synchronize
+  workflow_dispatch:
+    inputs:
+      macos:
+        description: "Also run on macos-latest (billed at 10x minutes on private repositories)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Single source of truth: the same `mise run verify` developers run locally.
+  # The Linux-only validators (cloud-init schema, apparmor_parser, nft) are
+  # installed here and made mandatory with REQUIRE_LINUX_VALIDATORS; on a Mac
+  # the same tasks skip them with a notice.
+  verify:
+    name: verify (render, schema, lint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Linux-only validators (cloud-init, apparmor, nftables)
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends cloud-init apparmor nftables
+      - name: Set up mise (pinned shellcheck, ruff, yamllint, actionlint, uv, node)
+        uses: jdx/mise-action@v2
+      - name: Cache the Mermaid CLI and its browser
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm/_npx
+            ~/.cache/puppeteer
+          key: mermaid-cli-${{ runner.os }}-12.0.0
+      - name: mise run verify
+        env:
+          REQUIRE_LINUX_VALIDATORS: "1"
+        run: mise run verify
+
+  # Optional macOS run, by hand only: the Linux validators are skipped there and
+  # macOS minutes are expensive on private repositories.
+  verify-macos:
+    name: verify on macOS (manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.macos
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Set up mise
+        uses: jdx/mise-action@v2
+      - name: Cache the Mermaid CLI and its browser
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm/_npx
+            ~/Library/Caches/puppeteer
+          key: mermaid-cli-${{ runner.os }}-12.0.0
+      - name: mise run verify
+        run: mise run verify

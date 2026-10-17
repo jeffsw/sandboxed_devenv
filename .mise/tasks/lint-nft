@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#MISE description="nft --check of the egress allowlist in the desk seed (Linux; skipped elsewhere unless REQUIRE_LINUX_VALIDATORS=1)"
+#MISE depends=["extract"]
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+rules=rehearsal/utm/build/extracted/desk/etc/nftables.conf
+if ! command -v nft >/dev/null 2>&1; then
+    if [ "${REQUIRE_LINUX_VALIDATORS:-0}" = "1" ]; then
+        echo "lint-nft: nft is not installed and REQUIRE_LINUX_VALIDATORS=1" >&2
+        exit 1
+    fi
+    echo "lint-nft: skipped, nft is not installed here (CI runs it)"
+    exit 0
+fi
+# A check needs netlink, hence root on most hosts.
+sudo -n nft --check --file "$rules" 2>/dev/null || nft --check --file "$rules"
+echo "lint-nft: ok"

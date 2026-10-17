@@ -1,0 +1,21 @@
+[env]
+# Nothing secret here; this file is committed. The rehearsal's secrets live in
+# rehearsal/utm/keys/ (gitignored): the rig key pair and, optionally, a Claude
+# Code token that make-seed.sh folds into the backend's settings.
+
+[settings]
+# The pipx backend runs through uv (pinned below) instead of a pipx install.
+pipx.uvx = true
+
+[tools]
+# Pinned so Claude, humans and CI run the same versions. Tasks live in
+# .mise/tasks/ as executable scripts; CI runs `mise run verify`, the one
+# definition of what "verified" means.
+shellcheck = "0.11.0"
+ruff = "0.16.10"
+actionlint = "1.7.12"
+"pipx:yamllint" = "1.38.0"
+# uv: runs extract-files.py with PyYAML, and backs the pipx backend above.
+uv = "0.13.0"
+# node: the Mermaid CLI check of the summary's diagrams (npx). Same pin as packetcount.
+node = "24.19.0"

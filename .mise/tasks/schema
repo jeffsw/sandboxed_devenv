@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+#MISE description="cloud-init schema validation of both rendered user-data files (Linux; skipped elsewhere unless REQUIRE_LINUX_VALIDATORS=1)"
+#MISE depends=["render"]
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+if ! command -v cloud-init >/dev/null 2>&1; then
+    if [ "${REQUIRE_LINUX_VALIDATORS:-0}" = "1" ]; then
+        echo "schema: cloud-init is not installed and REQUIRE_LINUX_VALIDATORS=1" >&2
+        exit 1
+    fi
+    echo "schema: skipped, cloud-init is not installed here (CI runs it)"
+    exit 0
+fi
+for vm in desk backend; do
+    # The schema check logs a harmless datasource warning when not run inside a cloud-init'd instance.
+    cloud-init schema --config-file "rehearsal/utm/build/$vm-seed/user-data" 2>&1 | grep -v 'WARNING' || true
+    cloud-init schema --config-file "rehearsal/utm/build/$vm-seed/user-data" >/dev/null 2>&1
+done
+echo "schema: ok"

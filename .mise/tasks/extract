@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+#MISE description="unpack the write_files of each rendered user-data into build/extracted/<vm>/ for linting"
+#MISE depends=["render"]
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT/rehearsal/utm"
+rm -rf build/extracted
+for vm in desk backend; do
+    uv run --quiet --python 3.13 --with pyyaml extract-files.py "build/$vm-seed/user-data" "build/extracted/$vm"
+done

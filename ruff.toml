@@ -1,0 +1,7 @@
+# Python in this repository is small, stdlib-only tooling: the canary, the
+# seed renderer and the mise tasks. Same defaults everywhere.
+line-length = 160
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "W"]
