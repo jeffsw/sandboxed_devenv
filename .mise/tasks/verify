@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="everything CI checks: render, schema, apparmor, nft, shell, python, yaml, actions, doc and Mermaid"
+#MISE depends=["schema", "lint-apparmor", "lint-nft", "lint-shell", "lint-python", "lint-yaml", "lint-actions", "lint-mermaid"]
+set -euo pipefail
+# The work happens in the depends above; this task only names the set.
+echo "verify: ok"

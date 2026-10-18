@@ -183,6 +183,9 @@ write_files:
   # the profiles attach to the launcher binaries: children (that test, the
   # Chromium helper) inherit them. Same shape as Ubuntu's /etc/apparmor.d/chrome;
   # the globs cover every client version Gateway downloads for gw. Loaded at boot.
+  # No exec rule is needed: the profiles are unconfined apart from granting userns,
+  # and AppArmor 4 (Ubuntu 24.04, where CI runs the parser) lacks the @{exec_path}
+  # variable that Ubuntu 26.04's own profiles use.
   - path: /etc/apparmor.d/jetbrains-client
     permissions: "0644"
     content: |
@@ -191,7 +194,6 @@ write_files:
 
       profile jetbrains-client /home/gw/.cache/JetBrains/JetBrainsClientDist/**/bin/jetbrains_client flags=(unconfined) {
         userns,
-        @{exec_path} mr,
         include if exists <local/jetbrains-client>
       }
 
@@ -199,13 +201,11 @@ write_files:
       # the launcher's profile above; this one covers a build that execs the helper.
       profile jetbrains-client-jcef /home/gw/.cache/JetBrains/JetBrainsClientDist/**/jcef_helper flags=(unconfined) {
         userns,
-        @{exec_path} mr,
         include if exists <local/jetbrains-client-jcef>
       }
 
       profile jetbrains-gateway /home/gw/gateway/jbr/bin/java flags=(unconfined) {
         userns,
-        @{exec_path} mr,
         include if exists <local/jetbrains-gateway>
       }
   - path: /etc/sysctl.d/99-vmrouter.conf

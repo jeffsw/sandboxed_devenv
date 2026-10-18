@@ -1,0 +1,11 @@
+---
+# Rendered cloud-init files have long base64 lines and start with a
+# "#cloud-config" comment instead of a document marker.
+extends: default
+rules:
+  line-length: disable
+  document-start: disable
+  truthy:
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1

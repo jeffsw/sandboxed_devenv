@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+#MISE description="summary doc rules: no em-dashes, consistent table columns, Mermaid blocks extracted for lint-mermaid"
+"""
+Checks ide_sandboxing_summary.md against the house rules and writes each Mermaid
+block to build/mermaid/<n>.mmd for the lint-mermaid task. Standard library only.
+"""
+import os
+import pathlib
+import re
+import sys
+
+
+def main() -> int:
+    os.chdir(os.environ['MISE_PROJECT_ROOT'])
+    doc = pathlib.Path('ide_sandboxing_summary.md')
+    text = doc.read_text()
+    problems = []
+
+    for number, line in enumerate(text.splitlines(), start=1):
+        if '—' in line:
+            problems.append(f'{doc}:{number}: em-dash; the doc uses commas, colons or parentheses instead')
+
+    # Every row of a table must have the same number of cells as its header.
+    width = None
+    for number, line in enumerate(text.splitlines(), start=1):
+        if line.startswith('|'):
+            cells = line.count('|')
+            if width is None:
+                width = cells
+            elif cells != width:
+                problems.append(f'{doc}:{number}: table row has {cells} pipes, header has {width}')
+        else:
+            width = None
+
+    blocks = re.findall(r'```mermaid\n(.*?)```', text, re.S)
+    out = pathlib.Path('rehearsal/utm/build/mermaid')
+    out.mkdir(parents=True, exist_ok=True)
+    for old in out.glob('*'):
+        old.unlink()
+    for index, block in enumerate(blocks):
+        (out / f'{index}.mmd').write_text(block)
+
+    for problem in problems:
+        print(problem)
+    print(f'lint-doc: {len(problems)} problems, {len(blocks)} Mermaid blocks written to {out}')
+    retval = 1 if problems else 0
+    return retval
+
+
+if __name__ == '__main__':
+    sys.exit(main())

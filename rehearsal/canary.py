@@ -142,7 +142,7 @@ SSH_AGENT_LIKE = re.compile(r"(openssh_agent|ssh-agent|keyring/ssh|gcr/ssh|S\.gp
 
 def probe_agents(host_home):
     found_keys = False
-    cands = [(l, p) for l, p in agent_candidates(host_home) if l == "SSH_AUTH_SOCK" or SSH_AGENT_LIKE.search(p)]
+    cands = [(label, p) for label, p in agent_candidates(host_home) if label == "SSH_AUTH_SOCK" or SSH_AGENT_LIKE.search(p)]
     if not cands:
         report("PASS", "agent sockets", "no SSH agent socket visible")
         return
@@ -167,7 +167,7 @@ def probe_ssh_config(role):
     """The backend's OpenSSH must never consult an agent: the IDE hands git an agent
     socket proxied to the client (summary 4.5)."""
     rc, out = run(["ssh", "-G", "github.com"])
-    conf = dict(l.split(" ", 1) for l in out.splitlines() if " " in l)
+    conf = dict(line.split(" ", 1) for line in out.splitlines() if " " in line)
     agent, fwd = conf.get("identityagent", "?"), conf.get("forwardagent", "?")
     if role == "backend":
         ok = agent == "none" and fwd == "no"
@@ -179,7 +179,7 @@ def probe_ssh_config(role):
 def probe_github(role):
     rc, out = run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
                    "-o", "StrictHostKeyChecking=accept-new", "-T", "git@github.com"], timeout=25)
-    line = next((l for l in out.splitlines() if "authenticated" in l or "denied" in l), out.splitlines()[-1] if out else "")
+    line = next((ln for ln in out.splitlines() if "authenticated" in ln or "denied" in ln), out.splitlines()[-1] if out else "")
     if "successfully authenticated" in out:
         who = line.split("!")[0].replace("Hi ", "")
         if role == "client":
@@ -507,7 +507,8 @@ def probe_clipboard():
         return
     rc, out = run(["wl-paste", "--no-newline"], timeout=4)
     if rc == 0:
-        report("INFO", "clipboard", f"wl-paste read {len(out)} bytes without focus being arranged (a Wayland client can read the selection when it has or briefly takes focus)")
+        report("INFO", "clipboard", f"wl-paste read {len(out)} bytes without focus being arranged "
+               "(a Wayland client can read the selection when it has or briefly takes focus)")
     else:
         report("INFO", "clipboard", f"wl-paste got nothing (rc {rc}: {out.splitlines()[0] if out else ''})")
 

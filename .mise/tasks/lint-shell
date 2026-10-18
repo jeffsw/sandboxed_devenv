@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+#MISE description="shellcheck + sh -n: the rig scripts, the bash tasks, and the gw scripts embedded in the desk seed"
+#MISE depends=["extract"]
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+files=(rehearsal/utm/make-seed.sh rehearsal/utm/create-vms.sh)
+# Tasks are extensionless; pick the shell ones by shebang.
+for t in .mise/tasks/*; do
+    [ -f "$t" ] || continue
+    if head -1 "$t" | grep -qE 'bash|/sh$'; then files+=("$t"); fi
+done
+# Scripts cloud-init writes on desk: gw-run, gw-session, gw-exec.
+for f in rehearsal/utm/build/extracted/desk/usr/local/bin/gw-*; do
+    [ -f "$f" ] && files+=("$f")
+done
+printf 'shellcheck %s\n' "${files[@]}"
+shellcheck --severity=style "${files[@]}"
+for f in "${files[@]}"; do
+    case "$(head -1 "$f")" in
+        *bash*) bash -n "$f" ;;
+        *) sh -n "$f" ;;
+    esac
+done
+echo "lint-shell: ok (${#files[@]} files)"
