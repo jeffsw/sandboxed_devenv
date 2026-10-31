@@ -38,6 +38,10 @@ Platform differences live in one driver layer. Everything above it is shared.
 
 ## Target layout
 
+Paths are relative to the repository root, `~/proj/ide_sandbox/sandboxed_devenv/`. The
+Python package directory inside it has the same name, as rpkilog's does
+(`python/rpkilog/rpkilog/`); `pyproject.toml` sits at the repository root beside it.
+
 ```
 pyproject.toml                   metadata, entry point sandboxed-devenv = sandboxed_devenv.cli:main
 sandboxed_devenv/
