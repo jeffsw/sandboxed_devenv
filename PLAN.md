@@ -1,15 +1,19 @@
 # Plan: from rehearsal scripts to a Python package
 
-Status: proposal, 23 October 2026. The design itself is in `ide_sandboxing_summary.md`;
-this file is the implementation plan for turning the rehearsal rig into an installable
-tool that runs the same way on the Mac (UTM) and on the Framework laptop (Incus).
+Status: proposal, 23 October 2026, revised 1 November so that one package, installed on
+every machine involved, carries every entry point. The design itself is in
+`ide_sandboxing_summary.md`; this file is the implementation plan for turning the
+rehearsal rig into an installable tool that runs the same way on the Mac (UTM) and on the
+Framework laptop (Incus).
 
 ## Goal
 
-One Python package, `sandboxed_devenv`, with one command, `sandboxed-devenv`, that
+One Python package, `sandboxed_devenv`, with one command, `sandboxed-devenv`, installed
+wherever Python runs for this project: the control machine, the client host, and every
+backend VM. `sandboxed-devenv --help` is the starting point on each of them. The command
 manages three things:
 
-1. **The host**: the client sandbox (`gw` user, its scripts, the AppArmor profile, the
+1. **The host**: the client sandbox (`gw` user, its launcher, the AppArmor profile, the
    egress rules) and the VM platform. On the Framework the host is the laptop; on the Mac
    it is the `desk` VM, which is what keeps the Mac useful as a test bed.
 2. **Backend VMs**: a base image built once from the backend cloud-init, and per-project
@@ -21,8 +25,29 @@ manages three things:
 
 Platform differences live in one driver layer. Everything above it is shared.
 
+## Roles
+
+Each machine plays one or more roles and runs the subcommands for those roles. The
+control side reaches the other two by running the same command over SSH, so no files are
+copied around and no remote configuration is edited by hand.
+
+| Role | On the Mac rig | On the Framework | Subcommands |
+|---|---|---|---|
+| control | the Mac | the laptop | `image`, `new`, `ls`, `start`, `stop`, `rm`, `clone`, `ssh`, `console`, `creds`, `test` |
+| client host | the `desk` VM | the laptop | `host`, `client`, `connect` |
+| backend | each backend VM under UTM | each backend VM under Incus | `backend` |
+| any | every machine above | every machine above | `doctor`, `render`, `canary`, `--version` |
+
+The user config names the client host: `client_host = "local"` on the Framework,
+`client_host = "ssh://jsw@192.168.64.10"` on the Mac. `doctor` reports which roles the
+machine it runs on can play, and a subcommand run in the wrong place says so and exits 1.
+
 ## Principles
 
+- **One package, installed wherever it runs.** No scripts beside it: the `gw` launcher
+  helpers, the canary and the backend's first-boot steps are all subcommands. The only
+  things copied as files are configuration: the AppArmor profile, nftables, sysctl, ssh
+  configs.
 - **Mechanism below, policy above.** Drivers know how to create a VM, attach cloud-init
   and find its address. They do not know what a backend is.
 - **Idempotent and inspectable.** Every mutating command has `--dry-run`, prints the
@@ -30,8 +55,9 @@ Platform differences live in one driver layer. Everything above it is shared.
 - **Secrets never enter rendered artifacts in CI.** Locally they come from a secrets
   directory or a secrets manager at render time; CI renders with placeholders. This is
   what `render.py` already does and it stays.
-- **The canary stays a single stdlib file.** It is copied into every VM and must run
-  there with nothing installed.
+- **The canary is a stdlib-only module.** It imports nothing outside the standard
+  library, so `python3 -m sandboxed_devenv.canary` still works on a VM whose install is
+  half done. It is no longer copied anywhere as a file.
 - **Same conventions as rpkilog**: setuptools, `argparse`, `pydantic` for models, `pytest`
   with importlib mode, tools pinned in `.mise.toml`, checks defined once as mise tasks and
   run by CI.
@@ -40,43 +66,45 @@ Platform differences live in one driver layer. Everything above it is shared.
 
 Paths are relative to the repository root, `~/proj/ide_sandbox/sandboxed_devenv/`. The
 Python package directory inside it has the same name, as rpkilog's does
-(`python/rpkilog/rpkilog/`); `pyproject.toml` sits at the repository root beside it.
+(`python/rpkilog/rpkilog/`); `pyproject.toml` sits at the repository root beside it. The
+package is grouped by role, so each machine's code is easy to find.
 
 ```
 pyproject.toml                   metadata, entry point sandboxed-devenv = sandboxed_devenv.cli:main
 sandboxed_devenv/
-  cli.py                         argparse subcommands, thin: parses and calls the modules below
+  cli.py                         one argparse tree; each role module registers its subcommands
   config.py                      user config + versions + policy models (pydantic), tomllib readers
-  render.py                      template rendering (from rehearsal/utm/render.py), no side effects
-  canary.py                      the canary, unchanged in spirit: stdlib only, runnable standalone
-  host/
-    install.py                   host provisioning: users, files, AppArmor, nftables, Gateway, linger
-    files/                       the files that used to be base64 blobs in the desk template,
-      usr/local/bin/gw-run         stored at their target path, modes in a manifest
-      usr/local/bin/gw-session
-      usr/local/bin/gw-exec
+  render.py                      template rendering and the wheel build, no side effects
+  canary.py                      stdlib-only probes; the `canary` subcommand; runnable with python3 -m
+  remote.py                      runs the command on the client host or a backend over SSH, parses --json
+  control/                       the control role: the Mac today, the Framework later
+    drivers/base.py              the Driver protocol
+    drivers/utm.py               utmctl, osascript, plutil, hdiutil (from create-vms.sh, make-seed.sh)
+    drivers/incus.py             incus CLI with --format json
+    images.py                    image build / ls / rm
+    instances.py                 new, ls, start, stop, rm, clone, ssh, console
+    inventory.py                 instances and their credentials, one JSON file per instance
+    creds.py                     mint, register, rotate, revoke (gh deploy keys, Claude token, gw key)
+    testing.py                   the headless provisioning harness
+  host/                          the client host role: desk on the Mac, the laptop on the Framework
+    install.py                   host install / check: users, files, AppArmor, nftables, Gateway, linger
+    client.py                    client start / session / exec (what gw-run, gw-session, gw-exec do)
+    connect.py                   connect add / rm / ls: Gateway sshConfigs.xml, gw's ssh_config, known_hosts
+    vm.yaml.tmpl                 the desk VM's cloud-init on the Mac rig: install the wheel, host install
+    files/                       configuration only, stored at its target path, modes in a manifest
       etc/apparmor.d/jetbrains-client
       etc/nftables.conf.tmpl
       etc/sysctl.d/99-vmrouter.conf
       home/gw/.ssh/config.tmpl
       home/gw/.config/JetBrains/...sshConfigs.xml.tmpl
-  backend/
-    base.yaml.tmpl               the base image cloud-init: packages, IDE backend, plugin, tools
-    instance.yaml.tmpl           the per-instance cloud-init: hostname, keys, identity, token, clone
+  backend/                       the backend role: inside every backend VM
+    prepare.py                   backend prepare / status / deploy-key
+    base.yaml.tmpl               the base image cloud-init: packages, IDE backend, plugin, tools, the wheel
+    instance.yaml.tmpl           the per-instance cloud-init: hostname, keys, instance config, prepare
     network-config.tmpl
-  drivers/
-    base.py                      the Driver protocol
-    utm.py                       utmctl, osascript, plutil, hdiutil (from create-vms.sh, make-seed.sh)
-    incus.py                     incus CLI with --format json
-  inventory.py                   instances and their credentials, one JSON file per instance
-  creds.py                       mint, register, rotate, revoke (gh deploy keys, Claude token, gw key)
-  connect.py                     Gateway sshConfigs.xml, gw's ssh_config and known_hosts
-  testing.py                     the headless provisioning harness
 tests/                           pytest: renderer golden files, drivers against recorded CLI output,
-                                 inventory, policy to nftables, canary parsing
-rehearsal/
-  utm/desk/                      the desk VM's cloud-init: install the wheel, run sandboxed-devenv host install
-  ci/                            puppeteer config for the Mermaid check (unchanged)
+                                 inventory, policy to nftables, canary and remote JSON parsing
+ci/                              puppeteer config for the Mermaid check (from rehearsal/ci/)
 docs/
   runbook.md                     install, new project, dispose, rotate, troubleshoot
   framework-install.md           the laptop's first day, step by step
@@ -84,29 +112,62 @@ policy.toml                      egress allowlists and the VM subnet
 versions.toml                    Gateway, IDE backend, client, Ubuntu image serial, tool versions
 ```
 
-`rehearsal/utm/{make-seed.sh,create-vms.sh,extract-files.py,render.py}` are replaced by the
-package and deleted once M2 reaches parity. `ide_sandboxing_summary.md` stays the design
-record; its 4.9 commands get replaced by `sandboxed-devenv` equivalents at M2.
+`rehearsal/` goes away: its scripts are replaced by the package and deleted once M2
+reaches parity, the desk template becomes `host/vm.yaml.tmpl`, and `rehearsal/ci/` moves
+to `ci/`. `ide_sandboxing_summary.md` stays the design record; its 4.9 commands get
+replaced by `sandboxed-devenv` equivalents at M2.
 
 ## CLI surface
 
-| Command | Does |
-|---|---|
-| `sandboxed-devenv doctor` | Reports which driver is usable (utmctl, incus), tool versions, config and secrets dirs |
-| `sandboxed-devenv render [--out DIR]` | Renders every artifact (cloud-init, nftables, AppArmor, ssh configs) without touching a VM. CI's entry point |
-| `sandboxed-devenv host install [--dry-run]` | Provisions the host: `gw` user and linger, files from the manifest, AppArmor, sysctl, nftables, Gateway tarball. Linux only, needs root |
-| `sandboxed-devenv host check` | Runs the canary in the client role via `gw-exec` and prints the summary |
-| `sandboxed-devenv image build [--force]` | Downloads the Ubuntu cloud image, boots it with `base.yaml`, waits, runs `cloud-init clean`, powers off, registers the base image |
-| `sandboxed-devenv image ls / rm` | Base images and their versions |
-| `sandboxed-devenv new NAME --repo OWNER/REPO [--disposable] [--write]` | Launches an instance from the base image with its own cloud-init, waits for cloud-init, mints and registers the deploy key, pins the host key, writes the Gateway connection, records everything in the inventory |
-| `sandboxed-devenv ls` | Instances, state, address, repository, credential ages |
-| `sandboxed-devenv start / stop / rm NAME` | Lifecycle; `rm` revokes every credential the inventory lists, then deletes the VM |
-| `sandboxed-devenv clone NAME NEW` | Disposable copy; the clone gets fresh instance credentials |
-| `sandboxed-devenv ssh NAME [CMD]`, `sandboxed-devenv console NAME` | Shell as `dev` with the rig key; serial console via the driver |
-| `sandboxed-devenv creds ls [NAME]` | Every credential, scope, age, where it lives, how it is revoked |
-| `sandboxed-devenv creds rotate NAME [--deploy-key] [--claude-token]` | Regenerate inside the VM, re-register, update the inventory |
-| `sandboxed-devenv canary --role client\|backend` | The canary itself, so one file serves both the package and the VMs |
-| `sandboxed-devenv test provision` | The headless harness: image, instance, canary both roles, SSH path, teardown |
+| Command | Role | Does |
+|---|---|---|
+| `sandboxed-devenv --version` | any | The package version; it must agree on every machine or `test provision` fails |
+| `sandboxed-devenv doctor` | any | Which roles this machine can play, driver and tool versions, config and secrets dirs, the version on each client host and backend it can reach |
+| `sandboxed-devenv render [--out DIR]` | any | Renders every artifact (cloud-inits, nftables, AppArmor, ssh configs) and builds the wheel, without touching a VM. CI's entry point |
+| `sandboxed-devenv canary --role ROLE [--json]` | any | The probes for the client or backend role, run locally |
+| `sandboxed-devenv image build [--force]` | control | Downloads the Ubuntu cloud image, boots it with the base cloud-init (which installs the package), waits, runs `cloud-init clean`, powers off, registers the base image |
+| `sandboxed-devenv image ls / rm` | control | Base images and their versions |
+| `sandboxed-devenv new NAME --repo OWNER/REPO [--disposable] [--write]` | control | Launches an instance from the base image with its own cloud-init, waits for `backend status` to report ready, registers the deploy key the instance minted, pins the host key, runs `connect add` on the client host, records everything in the inventory |
+| `sandboxed-devenv ls` | control | Instances, state, address, repository, package version, credential ages |
+| `sandboxed-devenv start / stop / rm NAME` | control | Lifecycle; `rm` revokes every credential the inventory lists and runs `connect rm`, then deletes the VM |
+| `sandboxed-devenv clone NAME NEW` | control | Disposable copy; the clone gets fresh instance credentials through `backend deploy-key new` |
+| `sandboxed-devenv ssh NAME [CMD]`, `sandboxed-devenv console NAME` | control | Shell as `dev` with the rig key; serial console via the driver |
+| `sandboxed-devenv creds ls [NAME]` | control | Every credential, scope, age, where it lives, how it is revoked |
+| `sandboxed-devenv creds rotate NAME [--deploy-key] [--claude-token]` | control | Regenerate inside the VM through `backend deploy-key new`, re-register, update the inventory |
+| `sandboxed-devenv test provision` | control | The headless harness: image, instance, canary in both roles, SSH path, version match, teardown |
+| `sandboxed-devenv host install [--dry-run] [--check]` | client host | Provisions the host: `gw` user and linger, files from the manifest, AppArmor, sysctl, nftables, Gateway tarball. Linux only, needs root |
+| `sandboxed-devenv host check` | client host | Runs the canary in the client role as `gw` (through `client exec`) and prints the summary |
+| `sandboxed-devenv client start` | client host | What `gw-run` does: the runtime-dir and Wayland socket ACLs, then `client session` as `gw` through sudo |
+| `sandboxed-devenv client session` | client host | As `gw`: the private Xwayland with its cookie, then the Gateway launcher |
+| `sandboxed-devenv client exec -- CMD` | client host | What `gw-exec` does: run a command as `gw` with its display and cookie |
+| `sandboxed-devenv connect add / rm / ls` | client host | Gateway's `sshConfigs.xml` entry, the `Host` stanza in `gw`'s `ssh_config`, the pinned key in `known_hosts` |
+| `sandboxed-devenv backend prepare` | backend | First boot of an instance: deploy key, GitHub host keys, git identity, Claude settings, `IdentityAgent none`, optional clone; reads `/etc/sandboxed-devenv/instance.toml` |
+| `sandboxed-devenv backend status [--json]` | backend | cloud-init done, IDE backend registered, package version, deploy key fingerprint, SSH host public keys |
+| `sandboxed-devenv backend deploy-key show / new` | backend | The public deploy key, or a fresh pair replacing it |
+
+## Installation
+
+One mechanism per operating system, and the result is the same everywhere:
+`sandboxed-devenv` on the PATH of every user that needs it.
+
+- **Linux, which is `desk`, every backend VM and the Framework:** `sudo pipx install
+  --global WHEEL_OR_CHECKOUT`. The venv lands under `/opt/pipx` and the command in
+  `/usr/local/bin`, readable by `jsw`, `gw`, `dev` and root, and inside sudo's
+  `secure_path`, so `sudo -u gw sandboxed-devenv client session` resolves without PATH
+  tricks. Ubuntu 26.04 ships pipx 1.8.0; the `--global` option arrived in 1.5.0. Not yet
+  confirmed on the rig (both VMs were stopped when the plan was revised); M1 does that.
+- **The Mac:** `uv tool install` from the checkout, since only one user runs it there.
+- **Into a VM:** `render` and `image build` run `uv build`; the wheel rides in the
+  cloud-init as one gzip-and-base64 `write_files` entry (tens of kilobytes, well within
+  NoCloud and Incus limits) and `runcmd` installs it before the role's subcommand runs.
+  Upgrading a running VM is `pipx install --global --force` of a wheel pushed over SSH,
+  or a rebuild.
+- **Versions:** the version lives in `pyproject.toml` and `--version` reads it from the
+  installed metadata. `doctor` and `ls` show the version on every host they can reach,
+  and `test provision` fails on skew.
+- **Dependencies:** runtime dependencies stay at `pydantic` and `pyyaml`, both with
+  prebuilt wheels for `aarch64` and `x86_64`, since every VM installs them. Anything
+  heavier goes in an optional dependency group used only on the control side.
 
 ## Work items
 
@@ -118,28 +179,40 @@ shows where the rig stands.
 - [x] Command name: `sandboxed-devenv`, the same as the distribution name (decided 24
       October).
 - [ ] `pyproject.toml`: setuptools, `requires-python >= 3.12`, dependencies `pyyaml` and
-      `pydantic`, dev group `pytest`, `ruff`; entry point `sandboxed-devenv`; package data
-      for `host/files/**` and `backend/*.tmpl`.
-- [ ] `sandboxed_devenv/cli.py` with `argparse` subparsers, one function per subcommand,
-      `--dry-run` and `--verbose` as global flags, exit codes: 0 ok, 1 failure, 2 usage.
+      `pydantic`, dev group `pytest`, `ruff`, `build`; entry point `sandboxed-devenv`;
+      package data for `host/files/**` and every `*.tmpl`; the version in one place,
+      read back by `--version` through `importlib.metadata`.
+- [ ] `sandboxed_devenv/cli.py` with `argparse` subparsers grouped by role as in the
+      table above, each role module registering its own, `--dry-run` and `--verbose` as
+      global flags, exit codes: 0 ok, 1 failure (including wrong role), 2 usage.
 - [ ] `uv.lock`; `.mise.toml` gains `_.python.venv = ".venv"` and a `uv sync` task like
       rpkilog's; `lint-python` and a new `test` task run inside the venv.
-- [ ] `tests/conftest.py` and a first test that `sandboxed-devenv --help` lists every
-      subcommand.
+- [ ] `render` builds the wheel with `uv build` into `build/`, beside the rendered
+      artifacts; the wheel is what every cloud-init carries from M1 on.
+- [ ] `tests/conftest.py` and first tests: `sandboxed-devenv --help` lists every
+      subcommand; `--version` matches `pyproject.toml`.
 - [ ] CI: `mise run verify` also runs `pytest`; the workflow installs the package in the
       venv. The macOS job stays manual.
 - [ ] `AGENTS.md` with the verification contract, as in rpkilog; `CLAUDE.md` includes it.
 - [x] Tools pinned in `.mise.toml`; checks defined once as mise tasks; CI runs
       `mise run verify`.
 
-### M1: host provisioning extraction
+### M1: the client host as subcommands
 
-The first payoff on both machines: real files instead of base64 blobs, lintable in place,
-and one installer that runs on the Framework and inside `desk`.
+The first payoff on both machines: real files instead of base64 blobs, the `gw` helpers
+as subcommands of the one command, and one installer that runs on the Framework and
+inside `desk`.
 
-- [ ] Move every `write_files` entry of `rehearsal/utm/desk/user-data.tmpl` to
-      `sandboxed_devenv/host/files/<target path>`; a `manifest.toml` lists owner, group,
-      mode and whether the file is a template.
+- [ ] Move the configuration `write_files` entries of `rehearsal/utm/desk/user-data.tmpl`
+      to `sandboxed_devenv/host/files/<target path>`; a `manifest.toml` lists owner,
+      group, mode and whether the file is a template. The three `gw` scripts are not
+      moved; they are rewritten as the next item.
+- [ ] `host/client.py`: `client start` (what `gw-run` does: the empty ACL entries on
+      every other runtime-dir entry, the Wayland socket ACL, then `sudo env HOME= USER=`
+      to `gw` and `client session`), `client session` (as `gw`: the private Xwayland `:9`
+      with an xauth cookie, no `-terminate`, then exec the Gateway launcher), and
+      `client exec -- CMD` (as `gw` with `DISPLAY` and `XAUTHORITY` set). Keep the dated
+      gotchas (`sudo --login` double parsing, launcher-attached profiles) as comments.
 - [ ] `host/install.py`: idempotent steps, each reporting changed/unchanged: create `gw`
       (no sudo, linger on), copy files from the manifest, `apparmor_parser --replace`,
       `sysctl --system`, nftables (installed, not enabled until policy says so), unpack
@@ -148,74 +221,97 @@ and one installer that runs on the Framework and inside `desk`.
 - [ ] `sandboxed-devenv host install --dry-run` prints the plan; `--check` exits non-zero
       if anything would change (for the headless harness and for drift checks on the
       laptop).
-- [ ] Delete `rehearsal/utm/extract-files.py` and the `extract` task; `lint-shell`,
-      `lint-apparmor` and `lint-nft` read `host/files/` directly, with templates rendered
-      by `sandboxed-devenv render`.
-- [ ] The desk cloud-init shrinks to: packages, the `jsw` user, the rig key, the package
-      wheel in one `write_files` entry, `runcmd: pip install` the wheel and
-      `sandboxed-devenv host install`. The wheel is built by `sandboxed-devenv render`
-      (via `python -m build`).
+- [ ] The canary's client role gains a probe that `sandboxed-devenv` resolves for `gw`
+      and that its venv under `/opt/pipx` is readable, since the sandbox now depends on
+      it.
+- [ ] Delete `rehearsal/utm/extract-files.py` and the `extract` task; `lint-apparmor`
+      and `lint-nft` read `host/files/` directly, with templates rendered by
+      `sandboxed-devenv render`. `lint-shell` keeps linting the remaining rig scripts
+      until M2 deletes them.
+- [ ] `host/vm.yaml.tmpl`, the desk cloud-init, shrinks to: packages (plus `pipx`), the
+      `jsw` user, the rig key, the wheel in one `write_files` entry, and `runcmd`:
+      `pipx install --global` the wheel, then `sandboxed-devenv host install`. This is
+      where pipx 1.8.0's `--global` gets confirmed on Ubuntu 26.04.
 - [ ] Rebuild `desk` from the new template; `sandboxed-devenv host check` passes with 0
-      FAIL; Gateway starts via `gw-run`; Markdown preview and clipboard still work.
-- [x] The host pieces exist and are proven on `desk`: `gw-run`, `gw-session`, `gw-exec`,
-      the AppArmor profiles, the runtime-dir ACLs, the private Xwayland with a cookie.
+      FAIL; Gateway starts via `sandboxed-devenv client start`; Markdown preview and
+      clipboard still work.
+- [x] The host pieces exist and are proven on `desk` as scripts: `gw-run`, `gw-session`,
+      `gw-exec`, the AppArmor profiles, the runtime-dir ACLs, the private Xwayland with
+      a cookie.
 
 ### M2: drivers, rendering and the backend split
 
 Parity with today's rig, then the old scripts go.
 
-- [ ] `drivers/base.py`: a `Driver` protocol with `create(name, image, cpus, memory,
-      seed)`, `start`, `stop`, `delete`, `clone`, `list`, `address(name)`,
-      `console(name)`, `wait_ready(name)` (polls `cloud-init status` over SSH with the
-      rig key), and `deliver_seed(name, dir)` because UTM wants an ISO attached as a
-      drive and Incus wants config keys.
-- [ ] `drivers/utm.py`: port `create-vms.sh` (AppleScript create, plutil for keyboard,
-      pointer and clipboard, the UTM relaunch) and `make-seed.sh` (hdiutil ISO). Keep the
-      documented UTM 4.7.5 quirks as comments with dates.
+- [ ] `control/drivers/base.py`: a `Driver` protocol with `create(name, image, cpus,
+      memory, seed)`, `start`, `stop`, `delete`, `clone`, `list`, `address(name)`,
+      `console(name)`, and `deliver_seed(name, dir)` because UTM wants an ISO attached as
+      a drive and Incus wants config keys.
+- [ ] `remote.py`: run `sandboxed-devenv ...` on the client host (locally when
+      `client_host = "local"`, else over SSH) and on a backend (over SSH as `dev` with
+      the rig key), returning parsed `--json` output. `wait_ready(name)` polls
+      `backend status --json` through it.
+- [ ] `control/drivers/utm.py`: port `create-vms.sh` (AppleScript create, plutil for
+      keyboard, pointer and clipboard, the UTM relaunch) and `make-seed.sh` (hdiutil
+      ISO). Keep the documented UTM 4.7.5 quirks as comments with dates.
 - [ ] `versions.toml`: Gateway, IDE backend, client build, Ubuntu release and image
       serial, architecture-specific download URLs keyed by `aarch64` and `x86_64`.
       `render.py` reads it; nothing else carries a version string.
 - [ ] Split `rehearsal/utm/backend/user-data.tmpl` into `backend/base.yaml.tmpl`
-      (packages, `gh` apt source, IDE tarball and `registerBackendLocationForGateway`,
-      plugin pre-install, tools, `mise` and `direnv` hooks, sshd hardening, canary) and
-      `backend/instance.yaml.tmpl` (hostname, `dev`'s authorized key, deploy key
-      generation, GitHub host keys, git identity, Claude settings, optional project clone,
-      deploy key printed to the console).
+      (packages including `pipx`, `gh` apt source, IDE tarball and
+      `registerBackendLocationForGateway`, plugin pre-install, tools, `mise` and `direnv`
+      hooks, sshd hardening, the wheel and its `pipx install --global`) and
+      `backend/instance.yaml.tmpl` (hostname, `dev`'s authorized key,
+      `/etc/sandboxed-devenv/instance.toml` with the repository, git identity and the
+      Claude token, then `runcmd: sandboxed-devenv backend prepare`).
+- [ ] `backend/prepare.py`: `backend prepare` does what the instance cloud-init's
+      `runcmd` does today (deploy key generation, GitHub host keys from
+      `api.github.com/meta`, git identity, Claude `settings.json`, `IdentityAgent none`,
+      optional project clone) and is idempotent; `backend status --json` reports
+      cloud-init state, the IDE backend registration, the package version, the deploy key
+      fingerprint and the SSH host public keys; `backend deploy-key show / new`.
 - [ ] `sandboxed-devenv image build`: boot the cloud image with the base cloud-init, wait,
       `cloud-init clean --logs`, power off; UTM keeps the raw disk under `build/images/`
       named by version, Incus publishes an image alias. Rebuilding is forced by a version
       change or `--force`.
 - [ ] `sandboxed-devenv new`, `ls`, `start`, `stop`, `rm`, `clone`, `ssh`, `console`
       working on the Mac with the UTM driver; the per-instance seed rendered from
-      `instance.yaml.tmpl`.
+      `instance.yaml.tmpl`; readiness from `backend status`.
+- [ ] `host/connect.py`: `connect add NAME ADDRESS HOSTKEY` writes the Gateway
+      `sshConfigs.xml` entry (only when Gateway is not running, else print instructions),
+      the `Host` stanza in `gw`'s `ssh_config` and the pinned host key in `known_hosts`;
+      `connect rm`, `connect ls`. `new` and `rm` call it through `remote.py`.
 - [ ] `policy.toml`: client egress (VM subnet, JetBrains download and account hosts),
       backend egress (GitHub, package indexes, Anthropic), the VM subnet.
       `sandboxed-devenv render` produces the host nftables ruleset from it; on the Mac the
       same ruleset lands on `desk` for the client half only, since UTM's private shared
       network cannot route the VMs through `desk` (known gap, Framework only).
 - [ ] Replace the 4.9 command blocks in the summary with `sandboxed-devenv` commands;
-      delete `make-seed.sh`, `create-vms.sh`, `render.py` under `rehearsal/utm/`; the mise
-      `render` and `schema` tasks call `sandboxed-devenv render`.
+      delete `rehearsal/utm/` (`make-seed.sh`, `create-vms.sh`, `render.py` and the
+      templates) and the `lint-shell` task with it; move `rehearsal/ci/` to `ci/`; the
+      mise `render` and `schema` tasks call `sandboxed-devenv render`.
 - [x] Templates, `render.py` with placeholder checking, `cloud-init schema` in CI, seed
       ISOs, VM creation via AppleScript, inter-VM host routes: all working on the Mac.
 
-### M3: credentials and connections
+### M3: credentials
 
-- [ ] `inventory.py`: one JSON file per instance under the state dir with name,
-      driver, repository, image version, created, and a `credentials` list; each entry
-      has kind, scope, fingerprint or id, where it lives, created, and the revoke action.
-- [ ] `creds.py`: deploy key (fetch the public key over SSH, `gh repo deploy-key add`,
-      record the key id; `revoke` runs `gh repo deploy-key delete`), Claude token (from
-      the secrets dir, hashed fingerprint only in the inventory; no revoke API, so
-      `creds ls` shows age and the runbook says how to rotate at the account), `gw`'s
-      key pair (minted once per host, recorded with its fingerprint), git identity.
-- [ ] `sandboxed-devenv rm` revokes everything listed before deleting the VM;
-      `sandboxed-devenv clone` gives the clone fresh instance credentials rather than
-      copying the parent's.
-- [ ] `connect.py`: write the Gateway `sshConfigs.xml` entry on a live host (only when
-      Gateway is not running, else print instructions), add the `Host` stanza to `gw`'s
-      `ssh_config`, pin the VM's SSH host key in `gw`'s `known_hosts` from the public key
-      read through the driver rather than by trusting first use.
+- [ ] `control/inventory.py`: one JSON file per instance under the state dir with name,
+      driver, repository, image version, package version, created, and a `credentials`
+      list; each entry has kind, scope, fingerprint or id, where it lives, created, and
+      the revoke action.
+- [ ] `control/creds.py`: deploy key (`backend deploy-key show` over SSH, `gh repo
+      deploy-key add`, record the key id; `revoke` runs `gh repo deploy-key delete`;
+      `rotate` runs `backend deploy-key new` and re-registers), Claude token (from the
+      secrets dir, hashed fingerprint only in the inventory; no revoke API, so `creds ls`
+      shows age and the runbook says how to rotate at the account), `gw`'s key pair
+      (minted once per host, recorded with its fingerprint), git identity.
+- [ ] `sandboxed-devenv rm` revokes everything listed and runs `connect rm` before
+      deleting the VM; `sandboxed-devenv clone` runs `backend deploy-key new` in the
+      clone and registers it, rather than copying the parent's.
+- [ ] Host key pinning: `new` takes the VM's SSH host public key through the driver
+      (Incus can read it from the guest; UTM's serial console carries cloud-init's host
+      key print) before the first SSH connection, then hands it to `connect add`; never
+      trust on first use.
 - [ ] Secrets dir: `~/.config/sandboxed-devenv/secrets/` (mode 0700) holding the rig key
       pair and `claude_oauth_token`; optional `op://` references resolved with the
       1Password CLI at render time. `sandboxed-devenv doctor` reports which is in use.
@@ -230,14 +326,17 @@ Parity with today's rig, then the old scripts go.
 - [ ] `canary.py` gains `--json` output (one object per probe plus a summary) and keeps
       the human output; exit code non-zero on any FAIL (already) and a `--expect FILE`
       mode that compares against a golden result for the role.
-- [ ] Unit tests: renderer golden files for both VMs and both architectures; drivers
-      against recorded `utmctl list` and `incus list --format json` output; inventory
-      round-trips; `policy.toml` to nftables checked with `nft --check` on Linux.
+- [ ] Unit tests: renderer golden files for both VMs and both architectures (the wheel
+      entry masked, since it changes with every version); drivers against recorded
+      `utmctl list` and `incus list --format json` output; `remote.py` against recorded
+      `--json` output; inventory round-trips; `policy.toml` to nftables checked with
+      `nft --check` on Linux; `host install --dry-run` plans.
 - [ ] `sandboxed-devenv test provision`: builds or reuses the image,
-      `sandboxed-devenv new ci-NAME`, waits, runs the canary in both roles, checks SSH
-      from `gw` to the instance and that the backend service is present, then
-      `sandboxed-devenv rm`. Runs on the Mac on demand (`mise run test-provision`) and
-      later on the Framework; never in GitHub CI.
+      `sandboxed-devenv new ci-NAME`, waits, runs the canary in both roles through
+      `remote.py`, checks SSH from `gw` to the instance, that the backend service is
+      present, and that `--version` agrees on the control side, the client host and the
+      instance, then `sandboxed-devenv rm`. Runs on the Mac on demand (`mise run
+      test-provision`) and later on the Framework; never in GitHub CI.
 - [ ] The interactive checklist in `docs/runbook.md`: Gateway, client, Wayland toolkit in
       About, Markdown preview, clipboard both ways, Claude Code `/status`, git fetch
       without a key dialog, plugin install path. This is the part that stays manual.
@@ -249,18 +348,20 @@ Parity with today's rig, then the old scripts go.
 
 Written before the laptop arrives, first run on it.
 
-- [ ] `drivers/incus.py`: `incus launch images:ubuntu/<release>/cloud NAME --vm` with
-      `cloud-init.user-data` and `cloud-init.network-config` config keys, `incus publish`
-      for the base image, `incus copy` for clones, `incus list --format json` for state
-      and addresses, `incus console` for the serial console.
+- [ ] `control/drivers/incus.py`: `incus launch images:ubuntu/<release>/cloud NAME --vm`
+      with `cloud-init.user-data` and `cloud-init.network-config` config keys, `incus
+      publish` for the base image, `incus copy` for clones, `incus list --format json`
+      for state and addresses, `incus console` for the serial console, `incus file pull`
+      for the host keys.
 - [ ] Host nftables from `policy.toml` covering both halves: the `gw` uid for the client
       and the forward chain on the Incus bridge for the VMs. Incus network ACLs are the
       alternative if the bridge rules fight with Incus's own firewall management; decide
       on the laptop.
 - [ ] `docs/framework-install.md`: Ubuntu 26.04 per Framework's guide, full-disk
       encryption, a separate volume for the Incus storage pool, the operations user or VM
-      for router access (summary section 5), `uv tool install` of the package from the
-      repository, `sudo sandboxed-devenv host install`, `sandboxed-devenv image build`,
+      for router access (summary section 5), then the package: `sudo pipx install
+      --global ~/proj/ide_sandbox/sandboxed_devenv`, `client_host = "local"` in the
+      config, `sudo sandboxed-devenv host install`, `sandboxed-devenv image build`,
       `sandboxed-devenv new` for the first project, `sandboxed-devenv host check`.
 - [ ] Run `sandboxed-devenv test provision` on the laptop; record timings in the summary
       (step 6 of 4.9 asked for them).
@@ -272,26 +373,29 @@ Written before the laptop arrives, first run on it.
 
 - [ ] Snapshots before disposal (`sandboxed-devenv snapshot NAME`), so uncommitted work in
       a project VM is recoverable for a while.
-- [ ] Version bump workflow: change `versions.toml`, `sandboxed-devenv image build`,
-      `sandboxed-devenv ls` shows which instances run an older image;
-      `sandboxed-devenv upgrade NAME` recreates from the new image with the same
-      credentials policy.
+- [ ] Version bump workflow: change `versions.toml` or the package version,
+      `sandboxed-devenv image build`, `sandboxed-devenv ls` shows which instances run an
+      older image or package; `sandboxed-devenv upgrade NAME` recreates from the new
+      image with the same credentials policy, or pushes the new wheel and reinstalls when
+      only the package changed.
 - [ ] Cloud and service CLIs per project (`aws`, Linode, Terraform) and their scoped
       credentials, the open question in the summary.
 - [ ] Section 5 hardening on the host: the 1Password agent allowlist, nothing
       router-related in the development principal.
 - [ ] The agent-level sandbox inside backend VMs (summary, "Deferred work"), once the rest
       is routine.
+- [ ] A release channel (a PyPI release or a Debian package) if carrying the wheel in
+      cloud-init and installing from the checkout proves tiresome.
 
 ## Order and gates
 
 | Milestone | Gate to pass | Where |
 |---|---|---|
 | M0 scaffold | `mise run verify` green with the package installed and one test | CI |
-| M1 host extraction | `desk` rebuilt from the slim template; `sandboxed-devenv host check` 0 FAIL; preview and clipboard work | Mac |
-| M2 drivers and backend split | `sandboxed-devenv new` to a connected client on the Mac; old scripts deleted | Mac |
-| M3 credentials and connections | `sandboxed-devenv new` and `sandboxed-devenv rm` need no manual GitHub or Gateway step | Mac |
-| M4 testing | `mise run test-provision` passes on the Mac unattended | Mac |
+| M1 client host | `desk` rebuilt from the slim template with the package installed; `sandboxed-devenv host check` 0 FAIL; Gateway via `client start`; preview and clipboard work | Mac |
+| M2 drivers and backend split | `sandboxed-devenv new` to a connected client on the Mac, the package installed in the instance; old scripts deleted | Mac |
+| M3 credentials | `sandboxed-devenv new` and `sandboxed-devenv rm` need no manual GitHub or Gateway step | Mac |
+| M4 testing | `mise run test-provision` passes on the Mac unattended, versions matching on all three machines | Mac |
 | M5 Framework | `sandboxed-devenv test provision` passes on the laptop; first real project opened | Framework |
 
 M1 through M4 run on the Mac rig as it exists today, two UTM VMs, no nested
@@ -304,15 +408,20 @@ machine, which is the reason the UTM driver is kept rather than retired.
       24 October; both were free on PyPI and Homebrew as of 23 October. Rejected: `devenv`
       (devenv.sh, Nix), `devbox` (Jetify), and the short `sdev`, which PyPI already has
       as an active serial-console toolkit that installs a command of that name.
+- [x] **Package install.** Decided 1 November: `pipx install --global` on Linux (`desk`,
+      every backend, the Framework), `uv tool install` on the Mac, and the wheel carried
+      in each VM's cloud-init. Rejected: `uv tool install` from the private repository on
+      the Framework (per user, so invisible to `gw`), and a bare `pip install` of the
+      wheel (refused by Ubuntu's externally managed Python).
 - [ ] **State dir.** `~/.local/state/sandboxed-devenv/` for the inventory and
       `~/.config/sandboxed-devenv/` for config and secrets, or everything under one
       directory. Default proposed: the two XDG locations.
 - [ ] **Base image on UTM.** A raw disk copied per instance (simple, what the rig does
       today) versus `utmctl clone` of a stopped base VM (faster, but UTM copies the whole
       bundle). Proposed: raw disk copy, since UTM's clone is not the Framework's path.
-- [ ] **Package install on the host.** `uv tool install git+ssh://...` from the private
-      repository versus a wheel built locally and installed with `pipx`. Proposed: `uv tool`
-      from the repository on the Framework; the wheel only inside `desk`.
+- [ ] **Wheel delivery to Incus VMs.** The cloud-init entry (uniform with UTM) versus
+      `incus file push` after launch (no size concern, one more driver step). Proposed:
+      the cloud-init entry, with the push as the fallback if Incus objects to the size.
 - [ ] **Incus storage.** Directory, btrfs or ZFS pool on the Framework; affects the
       partitioning on install day. Proposed: btrfs on its own volume.
 - [ ] **Host distribution.** Ubuntu 26.04 is assumed throughout (AppArmor profiles,
