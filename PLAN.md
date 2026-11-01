@@ -67,7 +67,8 @@ machine it runs on can play, and a subcommand run in the wrong place says so and
 Paths are relative to the repository root, `~/proj/ide_sandbox/sandboxed_devenv/`. The
 Python package directory inside it has the same name, as rpkilog's does
 (`python/rpkilog/rpkilog/`); `pyproject.toml` sits at the repository root beside it. The
-package is grouped by role, so each machine's code is easy to find.
+package is flat, like rpkilog's: one directory of modules, prefixed by the role they
+serve, with two data directories beside them and no subpackages.
 
 ```
 pyproject.toml                   metadata, entry point sandboxed-devenv = sandboxed_devenv.cli:main
@@ -77,33 +78,31 @@ sandboxed_devenv/
   render.py                      template rendering and the wheel build, no side effects
   canary.py                      stdlib-only probes; the `canary` subcommand; runnable with python3 -m
   remote.py                      runs the command on the client host or a backend over SSH, parses --json
-  control/                       the control role: the Mac today, the Framework later
-    drivers/base.py              the Driver protocol
-    drivers/utm.py               utmctl, osascript, plutil, hdiutil (from create-vms.sh, make-seed.sh)
-    drivers/incus.py             incus CLI with --format json
-    images.py                    image build / ls / rm
-    instances.py                 new, ls, start, stop, rm, clone, ssh, console
-    inventory.py                 instances and their credentials, one JSON file per instance
-    creds.py                     mint, register, rotate, revoke (gh deploy keys, Claude token, gw key)
-    testing.py                   the headless provisioning harness
-  host/                          the client host role: desk on the Mac, the laptop on the Framework
-    install.py                   host install / check: users, files, AppArmor, nftables, Gateway, linger
-    client.py                    client start / session / exec (what gw-run, gw-session, gw-exec do)
-    connect.py                   connect add / rm / ls: Gateway sshConfigs.xml, gw's ssh_config, known_hosts
-    vm.yaml.tmpl                 the desk VM's cloud-init on the Mac rig: install the wheel, host install
-    files/                       configuration only, stored at its target path, modes in a manifest
-      etc/apparmor.d/jetbrains-client
-      etc/nftables.conf.tmpl
-      etc/sysctl.d/99-vmrouter.conf
-      home/gw/.ssh/config.tmpl
-      home/gw/.config/JetBrains/...sshConfigs.xml.tmpl
-  backend/                       the backend role: inside every backend VM
-    prepare.py                   backend prepare / status / deploy-key
-    base.yaml.tmpl               the base image cloud-init: packages, IDE backend, plugin, tools, the wheel
-    instance.yaml.tmpl           the per-instance cloud-init: hostname, keys, instance config, prepare
-    network-config.tmpl
-tests/                           pytest: renderer golden files, drivers against recorded CLI output,
-                                 inventory, policy to nftables, canary and remote JSON parsing
+  control_driver.py              the Driver protocol
+  control_driver_utm.py          utmctl, osascript, plutil, hdiutil (from create-vms.sh, make-seed.sh)
+  control_driver_incus.py        incus CLI with --format json
+  control_images.py              image build / ls / rm
+  control_instances.py           new, ls, start, stop, rm, clone, ssh, console
+  control_inventory.py           instances and their credentials, one JSON file per instance
+  control_creds.py               mint, register, rotate, revoke (gh deploy keys, Claude token, gw key)
+  control_testing.py             the headless provisioning harness
+  host_install.py                host install / check: users, files, AppArmor, nftables, Gateway, linger
+  host_client.py                 client start / session / exec (what gw-run, gw-session, gw-exec do)
+  host_connect.py                connect add / rm / ls: Gateway sshConfigs.xml, gw's ssh_config, known_hosts
+  backend_prepare.py             backend prepare / status / deploy-key
+  templates/                     cloud-init templates, package data
+    host_vm.yaml.tmpl            the desk VM's cloud-init on the Mac rig: install the wheel, host install
+    backend_base.yaml.tmpl       the base image cloud-init: packages, IDE backend, plugin, tools, the wheel
+    backend_instance.yaml.tmpl   the per-instance cloud-init: hostname, keys, instance config, prepare
+    backend_network_config.tmpl
+  files/                         the client host's configuration at its target paths, package data
+    manifest.toml                owner, group, mode and whether each file is a template
+    etc/apparmor.d/jetbrains-client
+    etc/nftables.conf.tmpl
+    etc/sysctl.d/99-vmrouter.conf
+    home/gw/.ssh/config.tmpl
+    home/gw/.config/JetBrains/...sshConfigs.xml.tmpl
+tests/                           pytest, one test module per package module, as in rpkilog
 ci/                              puppeteer config for the Mermaid check (from rehearsal/ci/)
 docs/
   runbook.md                     install, new project, dispose, rotate, troubleshoot
@@ -113,9 +112,9 @@ versions.toml                    Gateway, IDE backend, client, Ubuntu image seri
 ```
 
 `rehearsal/` goes away: its scripts are replaced by the package and deleted once M2
-reaches parity, the desk template becomes `host/vm.yaml.tmpl`, and `rehearsal/ci/` moves
-to `ci/`. `ide_sandboxing_summary.md` stays the design record; its 4.9 commands get
-replaced by `sandboxed-devenv` equivalents at M2.
+reaches parity, the desk template becomes `templates/host_vm.yaml.tmpl`, and
+`rehearsal/ci/` moves to `ci/`. `ide_sandboxing_summary.md` stays the design record; its
+4.9 commands get replaced by `sandboxed-devenv` equivalents at M2.
 
 ## CLI surface
 
@@ -180,7 +179,7 @@ shows where the rig stands.
       October).
 - [ ] `pyproject.toml`: setuptools, `requires-python >= 3.12`, dependencies `pyyaml` and
       `pydantic`, dev group `pytest`, `ruff`, `build`; entry point `sandboxed-devenv`;
-      package data for `host/files/**` and every `*.tmpl`; the version in one place,
+      package data for `files/**` and `templates/*`; the version in one place,
       read back by `--version` through `importlib.metadata`.
 - [ ] `sandboxed_devenv/cli.py` with `argparse` subparsers grouped by role as in the
       table above, each role module registering its own, `--dry-run` and `--verbose` as
@@ -204,16 +203,16 @@ as subcommands of the one command, and one installer that runs on the Framework 
 inside `desk`.
 
 - [ ] Move the configuration `write_files` entries of `rehearsal/utm/desk/user-data.tmpl`
-      to `sandboxed_devenv/host/files/<target path>`; a `manifest.toml` lists owner,
+      to `sandboxed_devenv/files/<target path>`; `files/manifest.toml` lists owner,
       group, mode and whether the file is a template. The three `gw` scripts are not
       moved; they are rewritten as the next item.
-- [ ] `host/client.py`: `client start` (what `gw-run` does: the empty ACL entries on
+- [ ] `host_client.py`: `client start` (what `gw-run` does: the empty ACL entries on
       every other runtime-dir entry, the Wayland socket ACL, then `sudo env HOME= USER=`
       to `gw` and `client session`), `client session` (as `gw`: the private Xwayland `:9`
       with an xauth cookie, no `-terminate`, then exec the Gateway launcher), and
       `client exec -- CMD` (as `gw` with `DISPLAY` and `XAUTHORITY` set). Keep the dated
       gotchas (`sudo --login` double parsing, launcher-attached profiles) as comments.
-- [ ] `host/install.py`: idempotent steps, each reporting changed/unchanged: create `gw`
+- [ ] `host_install.py`: idempotent steps, each reporting changed/unchanged: create `gw`
       (no sudo, linger on), copy files from the manifest, `apparmor_parser --replace`,
       `sysctl --system`, nftables (installed, not enabled until policy says so), unpack
       the Gateway tarball for the pinned version and add the toolkit line to its
@@ -225,13 +224,13 @@ inside `desk`.
       and that its venv under `/opt/pipx` is readable, since the sandbox now depends on
       it.
 - [ ] Delete `rehearsal/utm/extract-files.py` and the `extract` task; `lint-apparmor`
-      and `lint-nft` read `host/files/` directly, with templates rendered by
+      and `lint-nft` read `files/` directly, with templates rendered by
       `sandboxed-devenv render`. `lint-shell` keeps linting the remaining rig scripts
       until M2 deletes them.
-- [ ] `host/vm.yaml.tmpl`, the desk cloud-init, shrinks to: packages (plus `pipx`), the
-      `jsw` user, the rig key, the wheel in one `write_files` entry, and `runcmd`:
-      `pipx install --global` the wheel, then `sandboxed-devenv host install`. This is
-      where pipx 1.8.0's `--global` gets confirmed on Ubuntu 26.04.
+- [ ] `templates/host_vm.yaml.tmpl`, the desk cloud-init, shrinks to: packages (plus
+      `pipx`), the `jsw` user, the rig key, the wheel in one `write_files` entry, and
+      `runcmd`: `pipx install --global` the wheel, then `sandboxed-devenv host install`.
+      This is where pipx 1.8.0's `--global` gets confirmed on Ubuntu 26.04.
 - [ ] Rebuild `desk` from the new template; `sandboxed-devenv host check` passes with 0
       FAIL; Gateway starts via `sandboxed-devenv client start`; Markdown preview and
       clipboard still work.
@@ -243,7 +242,7 @@ inside `desk`.
 
 Parity with today's rig, then the old scripts go.
 
-- [ ] `control/drivers/base.py`: a `Driver` protocol with `create(name, image, cpus,
+- [ ] `control_driver.py`: a `Driver` protocol with `create(name, image, cpus,
       memory, seed)`, `start`, `stop`, `delete`, `clone`, `list`, `address(name)`,
       `console(name)`, and `deliver_seed(name, dir)` because UTM wants an ISO attached as
       a drive and Incus wants config keys.
@@ -251,20 +250,20 @@ Parity with today's rig, then the old scripts go.
       `client_host = "local"`, else over SSH) and on a backend (over SSH as `dev` with
       the rig key), returning parsed `--json` output. `wait_ready(name)` polls
       `backend status --json` through it.
-- [ ] `control/drivers/utm.py`: port `create-vms.sh` (AppleScript create, plutil for
+- [ ] `control_driver_utm.py`: port `create-vms.sh` (AppleScript create, plutil for
       keyboard, pointer and clipboard, the UTM relaunch) and `make-seed.sh` (hdiutil
       ISO). Keep the documented UTM 4.7.5 quirks as comments with dates.
 - [ ] `versions.toml`: Gateway, IDE backend, client build, Ubuntu release and image
       serial, architecture-specific download URLs keyed by `aarch64` and `x86_64`.
       `render.py` reads it; nothing else carries a version string.
-- [ ] Split `rehearsal/utm/backend/user-data.tmpl` into `backend/base.yaml.tmpl`
+- [ ] Split `rehearsal/utm/backend/user-data.tmpl` into `templates/backend_base.yaml.tmpl`
       (packages including `pipx`, `gh` apt source, IDE tarball and
       `registerBackendLocationForGateway`, plugin pre-install, tools, `mise` and `direnv`
       hooks, sshd hardening, the wheel and its `pipx install --global`) and
-      `backend/instance.yaml.tmpl` (hostname, `dev`'s authorized key,
+      `templates/backend_instance.yaml.tmpl` (hostname, `dev`'s authorized key,
       `/etc/sandboxed-devenv/instance.toml` with the repository, git identity and the
       Claude token, then `runcmd: sandboxed-devenv backend prepare`).
-- [ ] `backend/prepare.py`: `backend prepare` does what the instance cloud-init's
+- [ ] `backend_prepare.py`: `backend prepare` does what the instance cloud-init's
       `runcmd` does today (deploy key generation, GitHub host keys from
       `api.github.com/meta`, git identity, Claude `settings.json`, `IdentityAgent none`,
       optional project clone) and is idempotent; `backend status --json` reports
@@ -276,8 +275,8 @@ Parity with today's rig, then the old scripts go.
       change or `--force`.
 - [ ] `sandboxed-devenv new`, `ls`, `start`, `stop`, `rm`, `clone`, `ssh`, `console`
       working on the Mac with the UTM driver; the per-instance seed rendered from
-      `instance.yaml.tmpl`; readiness from `backend status`.
-- [ ] `host/connect.py`: `connect add NAME ADDRESS HOSTKEY` writes the Gateway
+      `backend_instance.yaml.tmpl`; readiness from `backend status`.
+- [ ] `host_connect.py`: `connect add NAME ADDRESS HOSTKEY` writes the Gateway
       `sshConfigs.xml` entry (only when Gateway is not running, else print instructions),
       the `Host` stanza in `gw`'s `ssh_config` and the pinned host key in `known_hosts`;
       `connect rm`, `connect ls`. `new` and `rm` call it through `remote.py`.
@@ -295,11 +294,11 @@ Parity with today's rig, then the old scripts go.
 
 ### M3: credentials
 
-- [ ] `control/inventory.py`: one JSON file per instance under the state dir with name,
+- [ ] `control_inventory.py`: one JSON file per instance under the state dir with name,
       driver, repository, image version, package version, created, and a `credentials`
       list; each entry has kind, scope, fingerprint or id, where it lives, created, and
       the revoke action.
-- [ ] `control/creds.py`: deploy key (`backend deploy-key show` over SSH, `gh repo
+- [ ] `control_creds.py`: deploy key (`backend deploy-key show` over SSH, `gh repo
       deploy-key add`, record the key id; `revoke` runs `gh repo deploy-key delete`;
       `rotate` runs `backend deploy-key new` and re-registers), Claude token (from the
       secrets dir, hashed fingerprint only in the inventory; no revoke API, so `creds ls`
@@ -348,7 +347,7 @@ Parity with today's rig, then the old scripts go.
 
 Written before the laptop arrives, first run on it.
 
-- [ ] `control/drivers/incus.py`: `incus launch images:ubuntu/<release>/cloud NAME --vm`
+- [ ] `control_driver_incus.py`: `incus launch images:ubuntu/<release>/cloud NAME --vm`
       with `cloud-init.user-data` and `cloud-init.network-config` config keys, `incus
       publish` for the base image, `incus copy` for clones, `incus list --format json`
       for state and addresses, `incus console` for the serial console, `incus file pull`
