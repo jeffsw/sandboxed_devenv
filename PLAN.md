@@ -98,7 +98,7 @@ sandboxed_devenv/
       etc__nftables.conf.tmpl
       etc__sysctl.d__99-vmrouter.conf
       home__gw__.ssh__config.ssh_config.tmpl
-      home__gw__.config__JetBrains__options__sshConfigs.xml.tmpl
+      home__gw__.config__JetBrains__JetBrainsGateway@@GATEWAY_BRANCH@@__options__sshConfigs.xml.tmpl
     backend/
       cloudinit-base__user-data.yaml.tmpl       the base image: packages, IDE backend, plugin, tools, the wheel
       cloudinit-instance__user-data.yaml.tmpl   per instance: hostname, keys, instance config, prepare
@@ -135,9 +135,14 @@ it is and whether it is rendered, and the file itself says so too.
 - **The format is the extension.** The destination's own when it has one, otherwise an
   added one from a fixed set: `.apparmor`, `.ssh_config`, `.yaml` for cloud-init. `.tmpl`
   comes last and marks a template; everything else is copied byte for byte.
-- **One exception.** Gateway's directory contains the branch,
-  `JetBrainsGateway@@GATEWAY_BRANCH@@`, which belongs in the rendered destination rather
-  than a filename, so that file omits the segment and the manifest carries the full path.
+- **A variable part of a destination is written as `@@NAME@@`,** upper case, at the
+  position it occupies in the path, exactly as placeholders are written inside
+  templates. The filename then decodes to the manifest's `dest` character for
+  character, and the value comes from `versions.yaml` or the instance config at deploy
+  time. Gateway's directory carries its branch, so its file is
+  `home__gw__.config__JetBrains__JetBrainsGateway@@GATEWAY_BRANCH@@__options__sshConfigs.xml.tmpl`.
+  A variable in the path says nothing about the content; `.tmpl` is still decided by
+  whether the content is rendered.
 - **`manifest.yaml` is the authority** for what a file cannot say about itself: `dest`
   (placeholders allowed), `owner`, `group`, `mode` (quoted, since YAML reads a bare
   `0644` as an octal integer), `template`, a one-line `description`, and for backend
@@ -148,8 +153,8 @@ it is and whether it is rendered, and the file itself says so too.
   `#cloud-config` first, so those documents carry it on line two; JSON has no comments,
   so `settings.json` relies on the manifest alone.
 - **A unit test keeps the three in step:** every manifest `source` exists, every file
-  under `files/` other than the manifest has an entry, every filename follows the rule,
-  and every header agrees with its entry. It runs in CI from M1 on.
+  under `files/` other than the manifest has an entry, every filename decodes to its
+  entry's `dest`, and every header agrees with its entry. It runs in CI from M1 on.
 
 ## CLI surface
 
@@ -242,8 +247,8 @@ inside `desk`.
       `files/manifest.yaml` with `dest`, `owner`, `group`, `mode`, `template` and a
       `description` per file (the descriptions in the layout above are the starting
       point). The three `gw` scripts are not moved; they are rewritten as the next item.
-- [ ] `tests/test_files.py`: the manifest, the tree and the headers agree, as described
-      under "Files and templates"; runs in CI with the rest of pytest.
+- [ ] `tests/test_files_manifest.py`: the manifest, the tree and the headers agree, as
+      described under "Files and templates"; runs in CI with the rest of pytest.
 - [ ] `host_client.py`: `client start` (what `gw-run` does: the empty ACL entries on
       every other runtime-dir entry, the Wayland socket ACL, then `sudo env HOME= USER=`
       to `gw` and `client session`), `client session` (as `gw`: the private Xwayland `:9`
