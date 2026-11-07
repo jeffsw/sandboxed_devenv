@@ -81,3 +81,35 @@ def test_prepare_refuses_off_linux_or_without_root(capsys):
     assert status == 1
     err = capsys.readouterr().err
     assert "Linux" in err or "needs root" in err
+
+
+@pytest.fixture
+def backend_markers(tmp_path, monkeypatch):
+    """The three /etc/sandboxed-devenv files moved into a temporary directory."""
+    from sandboxed_devenv import config
+
+    monkeypatch.setattr(config, "BACKEND_PROJECT_CONFIG", tmp_path / "project.yaml")
+    monkeypatch.setattr(config, "BACKEND_PREPARED_MARKER", tmp_path / "prepared.yaml")
+    monkeypatch.setattr(config, "BACKEND_IMAGE_MARKER", tmp_path / "image.yaml")
+    retval = tmp_path
+    return retval
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads everything")
+def test_status_and_project_name_without_reading_the_token_file(backend_markers, capsys):
+    (backend_markers / "project.yaml").write_text("project: p\nclaude_oauth_token: secret\n")
+    (backend_markers / "project.yaml").chmod(0)
+    assert backend_prepare.project_name() is None
+    status = cli.main(["backend", "status"])
+    assert status == 0
+    out = capsys.readouterr().out
+    assert "unknown" in out
+    assert "secret" not in out
+    (backend_markers / "prepared.yaml").write_text("project: p\nrepositories: [jeffsw/a]\npackage_version: x\n")
+    assert backend_prepare.project_name() == "p"
+    status = cli.main(["backend", "status", "--json"])
+    assert status == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["project"]["name"] == "p"
+    assert report["project"]["repositories"] == ["jeffsw/a"]
+    assert "secret" not in json.dumps(report)

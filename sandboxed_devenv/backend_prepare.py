@@ -291,9 +291,27 @@ def list_repositories(paths: Paths, project: str | None) -> list[dict]:
     return retlist
 
 
+def readable_project_config() -> config.ProjectConfig | None:
+    """project.yaml when this user may read it (root only: it holds the token), else None."""
+    retval = None
+    if os.access(config.BACKEND_PROJECT_CONFIG, os.R_OK):
+        retval = config.load_project_config()
+    return retval
+
+
+def prepared_marker() -> dict | None:
+    """prepared.yaml, world-readable: the project's name and repositories as prepare last saw them."""
+    retval = yaml.safe_load(read_text(config.BACKEND_PREPARED_MARKER) or "") or None
+    return retval
+
+
 def project_name() -> str | None:
-    project = config.load_project_config()
-    retval = project.project if project else None
+    """From prepared.yaml, which dev can read, else from project.yaml when readable."""
+    marker = prepared_marker()
+    retval = marker.get("project") if marker else None
+    if retval is None:
+        project = readable_project_config()
+        retval = project.project if project else None
     return retval
 
 
@@ -498,8 +516,13 @@ def step_repositories(ctx: Context) -> list[Outcome]:
 
 
 def step_prepared_marker(ctx: Context) -> list[Outcome]:
-    wanted = {"project": ctx.project.project, "package_version": common.package_version()}
-    current = yaml.safe_load(read_text(config.BACKEND_PREPARED_MARKER) or "") or {}
+    """World-readable, so dev's `backend status` and `repo` commands know the project without the token."""
+    wanted = {
+        "project": ctx.project.project,
+        "repositories": [repository.name for repository in ctx.project.repositories],
+        "package_version": common.package_version(),
+    }
+    current = prepared_marker() or {}
     differs = {key: current.get(key) for key in wanted} != wanted
     retlist = [outcome(ctx, f"{config.BACKEND_PREPARED_MARKER}", f"project {ctx.project.project}", differs,
                        lambda: write_yaml(config.BACKEND_PREPARED_MARKER,
@@ -582,18 +605,20 @@ def ssh_host_keys() -> list[str]:
 
 
 def status_report() -> dict:
-    project = config.load_project_config() if os.access(config.BACKEND_PROJECT_CONFIG, os.R_OK) else None
-    name = project.project if project else None
+    project = readable_project_config()
+    prepared = prepared_marker()
+    name = project_name()
     cloud_init = cloud_init_status()
-    prepared = yaml.safe_load(read_text(config.BACKEND_PREPARED_MARKER) or "") or None
     image = yaml.safe_load(read_text(config.BACKEND_IMAGE_MARKER) or "") or None
     project_report = None
-    if config.BACKEND_PROJECT_CONFIG.exists():
-        project_report = {
-            "name": name,
-            "repositories": [repository.name for repository in project.repositories] if project else None,
-            "prepared": prepared,
-        }
+    if config.BACKEND_PROJECT_CONFIG.exists() or prepared:
+        if project:
+            repositories = [repository.name for repository in project.repositories]
+        elif prepared:
+            repositories = prepared.get("repositories")
+        else:
+            repositories = None
+        project_report = {"name": name, "repositories": repositories, "prepared": prepared}
     retdict = {
         "hostname": socket.gethostname(),
         "package_version": common.package_version(),
@@ -617,11 +642,17 @@ def cmd_status(args) -> int:
         print(f"cloud-init: {report['cloud_init']['status']} {report['cloud_init']['detail']}".rstrip())
         print(f"image: {report['image'] or 'no image.yaml (not built by image build)'}")
         project = report["project"]
-        print(f"project: {project['name'] + ', prepared: ' + str(bool(project['prepared'])) if project else 'none (no project.yaml)'}")
+        if project:
+            print(f"project: {project['name'] or 'unknown (project.yaml unreadable, not yet prepared)'}, "
+                  f"prepared: {bool(project['prepared'])}, repositories: {', '.join(project['repositories'] or []) or 'none'}")
+        else:
+            print("project: none (no project.yaml)")
         ide = report["ide_backend"]
         installed = ide["installed"]
-        print(f"ide backend: {installed['name'] + ' ' + installed['version'] if installed else 'not installed'}, "
-              f"registered for Gateway: {ide['registered']}")
+        if installed:
+            print(f"ide backend: {installed['name']} {installed['version']}, registered for Gateway: {ide['registered']}")
+        else:
+            print(f"ide backend: not installed, registered for Gateway: {ide['registered']}")
         if report["repositories"]:
             for record in report["repositories"]:
                 print(f"repository {record['repository']}: {record['fingerprint']} {record['checkout'] or 'not cloned'}")
