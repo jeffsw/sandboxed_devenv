@@ -16,7 +16,7 @@ manages three things:
 1. **The host**: the client sandbox (`gw` user, its launcher, the AppArmor profile, the
    egress rules) and the VM platform. On the Framework the host is the laptop; on the Mac
    it is the `desk` VM, which is what keeps the Mac useful as a test bed.
-2. **Backend VMs**: a base image built once from the backend cloud-init, and one instance
+2. **Backend VMs**: a base image built once from the backend cloud-init, and one backend
    per project launched from it in seconds, holding that project's repositories with a
    credential per repository, plus disposable clones.
 3. **Provisioning and verification**: rendering every artifact without side effects (for
@@ -44,11 +44,17 @@ machine it runs on can play, and a subcommand run in the wrong place says so and
 
 ## Projects and repositories
 
-An instance is a project, named as its directory under `~/proj/` is on the Mac, and it
-holds that project's repositories at `~/proj/NAME/<repo>` inside the VM, the same layout
-as outside. Repositories come and go over the life of the instance: `new` takes none or
-several, `repo add` and `repo rm` change the set later, and the Gateway connection opens
-`~/proj/NAME`, where the IntelliJ project spans them.
+A **project** is the unit of work: a directory `~/proj/<project>` holding one or more
+repositories, the layout used on the Mac. A **backend** is the VM that serves one
+project, and there is exactly one per project, so every command that needs a backend
+takes the project's name as `PROJECT` and finds the backend through the inventory; no
+command takes a backend name. The VM itself is named after the project, with an optional
+prefix from the user config to keep it apart from other VMs on a shared hypervisor.
+Inside the VM the repositories are checked out at `~/proj/PROJECT/<repo>`, the same
+layout as outside, and the Gateway connection opens `~/proj/PROJECT`, where the IntelliJ
+project spans them. Repositories come and go over the life of the backend: `new` takes
+none or several, `repo add` and `repo rm` change the set later. A disposable backend is
+a project too, a short-lived one with a name to match.
 
 Each repository gets its own deploy key pair inside the VM, because GitHub refuses a
 deploy key that is already registered on another repository. The pair lives at
@@ -57,7 +63,7 @@ deploy key that is already registered on another repository. The pair lives at
 and the checkout's remote uses the alias. Adding a repository mints and registers a key;
 removing one revokes it on GitHub first, then deletes it in the VM, and leaves the
 checkout unless asked otherwise. The inventory records every key with its GitHub id, so
-`rm` of the instance revokes them all, and a revocation that fails is kept as
+`rm` of the project revokes them all, and a revocation that fails is kept as
 `pending-revoke` until `creds audit` gets it through.
 
 ## Principles
@@ -100,8 +106,8 @@ sandboxed_devenv/
   control_driver_utm.py          utmctl, osascript, plutil, hdiutil (from create-vms.sh, make-seed.sh)
   control_driver_incus.py        incus CLI with --format json
   control_images.py              image build / ls / rm
-  control_instances.py           new, ls, start, stop, rm, clone, ssh, console
-  control_inventory.py           instances and their credentials, one JSON file per instance
+  control_backends.py            new, ls, start, stop, rm, clone, ssh, console: one backend per project
+  control_inventory.py           backends and their credentials, one JSON file per project
   control_creds.py               mint, register, rotate, revoke (gh deploy keys, Claude token, gw key)
   control_testing.py             the headless provisioning harness
   host_install.py                host install / check: users, files, AppArmor, nftables, Gateway, linger
@@ -118,8 +124,8 @@ sandboxed_devenv/
       home__gw__.ssh__config.ssh_config.tmpl
       home__gw__.config__JetBrains__JetBrainsGateway@@GATEWAY_BRANCH@@__options__sshConfigs.xml.tmpl
     backend/
-      cloudinit-base__user-data.yaml.tmpl       the base image: packages, IDE backend, plugin, tools, the wheel
-      cloudinit-instance__user-data.yaml.tmpl   per instance: hostname, keys, instance config, prepare
+      cloudinit-image__user-data.yaml.tmpl      the base image: packages, IDE backend, plugin, tools, the wheel
+      cloudinit-project__user-data.yaml.tmpl    a project's backend: hostname, keys, project config, prepare
       cloudinit__network-config.yaml.tmpl
       etc__ssh__sshd_config.d__10-backend.conf
       home__dev__.ssh__config.ssh_config
@@ -148,15 +154,15 @@ it is and whether it is rendered, and the file itself says so too.
   dropped and every other slash replaced by `__`. Dots stay, since none is leading once
   joined: `home__gw__.ssh__config`. Cloud-init documents have no destination, so they
   take the prefix `cloudinit__` and the NoCloud file name, which Incus also uses for its
-  config keys; the backend's two documents are `cloudinit-base__` and
-  `cloudinit-instance__`.
+  config keys; the backend role has `cloudinit-image__` for the base image and
+  `cloudinit-project__` for a project's backend.
 - **The format is the extension.** The destination's own when it has one, otherwise an
   added one from a fixed set: `.apparmor`, `.ssh_config`, `.yaml` for cloud-init. `.tmpl`
   comes last and marks a template; everything else is copied byte for byte.
 - **A variable part of a destination is written as `@@NAME@@`,** upper case, at the
   position it occupies in the path, exactly as placeholders are written inside
   templates. The filename then decodes to the manifest's `dest` character for
-  character, and the value comes from `versions.yaml` or the instance config at deploy
+  character, and the value comes from `versions.yaml` or the project config at deploy
   time. Gateway's directory carries its branch, so its file is
   `home__gw__.config__JetBrains__JetBrainsGateway@@GATEWAY_BRANCH@@__options__sshConfigs.xml.tmpl`.
   A variable in the path says nothing about the content; `.tmpl` is still decided by
@@ -164,7 +170,7 @@ it is and whether it is rendered, and the file itself says so too.
 - **`manifest.yaml` is the authority** for what a file cannot say about itself: `dest`
   (placeholders allowed), `owner`, `group`, `mode` (quoted, since YAML reads a bare
   `0644` as an octal integer), `template`, a one-line `description`, and for backend
-  files the `stage`, `image` or `instance`, at which `backend prepare` deploys them.
+  files the `stage`, `image` or `project`, at which `backend prepare` deploys them.
 - **Every file says where it goes.** Each file whose format has comments opens with a
   line naming the role and destination, such as
   `# sandboxed-devenv host: rendered to /etc/nftables.conf`. Cloud-init needs
@@ -184,25 +190,25 @@ it is and whether it is rendered, and the file itself says so too.
 | `sandboxed-devenv canary --role ROLE [--json]` | any | The probes for the client or backend role, run locally |
 | `sandboxed-devenv image build [--force]` | control | Downloads the Ubuntu cloud image, boots it with the base cloud-init (which installs the package), waits, runs `cloud-init clean`, powers off, registers the base image |
 | `sandboxed-devenv image ls / rm` | control | Base images and their versions |
-| `sandboxed-devenv new NAME [--repo OWNER/REPO]... [--disposable] [--deploy-key-grants-repo-write]` | control | Launches an instance from the base image with its own cloud-init, waits for `backend status` to report ready, runs `repo add` for each `--repo`, pins the host key, runs `connect add` on the client host, records everything in the inventory. `--repo` is optional and repeatable; repositories can be added later. `--disposable` marks a VM for stranger code, used once and destroyed (summary 4.7): `ls` flags it and `rm` takes no snapshot. `--deploy-key-grants-repo-write` applies to every `--repo` given and registers its key with write access (`gh repo deploy-key add --allow-write`) so the VM can push; the default key is read-only |
-| `sandboxed-devenv ls` | control | Instances, state, address, repositories, package version, credential ages |
-| `sandboxed-devenv start / stop / rm NAME` | control | Lifecycle; `rm` revokes every credential the inventory lists and runs `connect rm`, then deletes the VM |
-| `sandboxed-devenv clone NAME NEW` | control | Disposable copy; every repository in the clone gets a fresh key pair through `backend repo rekey`, registered under the clone's name |
-| `sandboxed-devenv repo add NAME OWNER/REPO [--deploy-key-grants-repo-write] [--no-clone]` | control | Mints a key pair for the repository in the VM (`backend repo add`), registers it with `gh repo deploy-key add`, records it in the inventory, clones to `~/proj/NAME/REPO` |
-| `sandboxed-devenv repo rm NAME OWNER/REPO [--delete-checkout]` | control | Revokes the key on GitHub, then removes it and its alias stanza in the VM; the checkout stays unless asked |
-| `sandboxed-devenv repo ls NAME` | control | The instance's repositories with key fingerprint, access and age |
-| `sandboxed-devenv ssh NAME [CMD]`, `sandboxed-devenv console NAME` | control | Shell as `dev` with the rig key; serial console via the driver |
-| `sandboxed-devenv creds ls [NAME]` | control | Every credential, scope, age, where it lives, how it is revoked |
-| `sandboxed-devenv creds rotate NAME [--deploy-key [OWNER/REPO]] [--claude-token]` | control | Regenerate inside the VM (`backend repo rekey` for one repository or all), re-register, update the inventory |
-| `sandboxed-devenv creds audit [--fix]` | control | Compares the inventory with `gh repo deploy-key list` on every repository it knows: retries pending revocations, reports keys GitHub holds that no instance claims, and with `--fix` deletes them |
-| `sandboxed-devenv test provision` | control | The headless harness: image, instance, canary in both roles, SSH path, version match, teardown |
+| `sandboxed-devenv new PROJECT [--repo OWNER/REPO]... [--disposable] [--deploy-key-grants-repo-write]` | control | Launches the backend for PROJECT from the base image with its own cloud-init, waits for `backend status` to report ready, runs `repo add` for each `--repo`, pins the host key, runs `connect add` on the client host, records everything in the inventory. `--repo` is optional and repeatable; repositories can be added later. `--disposable` marks the backend for stranger code, used once and destroyed (summary 4.7): `ls` flags it and `rm` takes no snapshot. `--deploy-key-grants-repo-write` applies to every `--repo` given and registers its key with write access (`gh repo deploy-key add --allow-write`) so the VM can push; the default key is read-only |
+| `sandboxed-devenv ls` | control | Projects with their backend's state, address, repositories, package version, credential ages |
+| `sandboxed-devenv start / stop / rm PROJECT` | control | Lifecycle of the project's backend; `rm` revokes every credential the inventory lists and runs `connect rm`, then deletes the VM |
+| `sandboxed-devenv clone PROJECT NEW_PROJECT` | control | A disposable backend for NEW_PROJECT copied from PROJECT's; every repository in the copy gets a fresh key pair through `backend repo rekey`, registered under the new project's name |
+| `sandboxed-devenv repo add PROJECT OWNER/REPO [--deploy-key-grants-repo-write] [--no-clone]` | control | Mints a key pair for the repository in the VM (`backend repo add`), registers it with `gh repo deploy-key add`, records it in the inventory, clones to `~/proj/PROJECT/REPO` |
+| `sandboxed-devenv repo rm PROJECT OWNER/REPO [--delete-checkout]` | control | Revokes the key on GitHub, then removes it and its alias stanza in the VM; the checkout stays unless asked |
+| `sandboxed-devenv repo ls PROJECT` | control | The project's repositories with key fingerprint, access and age |
+| `sandboxed-devenv ssh PROJECT [CMD]`, `sandboxed-devenv console PROJECT` | control | Shell as `dev` in the project's backend with the rig key; serial console via the driver |
+| `sandboxed-devenv creds ls [PROJECT]` | control | Every credential, scope, age, where it lives, how it is revoked |
+| `sandboxed-devenv creds rotate PROJECT [--deploy-key [OWNER/REPO]] [--claude-token]` | control | Regenerate inside the VM (`backend repo rekey` for one repository or all), re-register, update the inventory |
+| `sandboxed-devenv creds audit [--fix]` | control | Compares the inventory with `gh repo deploy-key list` on every repository it knows: retries pending revocations, reports keys GitHub holds that no project claims, and with `--fix` deletes them |
+| `sandboxed-devenv test provision` | control | The headless harness: image, a throwaway project, canary in both roles, SSH path, version match, teardown |
 | `sandboxed-devenv host install [--dry-run] [--check]` | client host | Provisions the host: `gw` user and linger, files from the manifest, AppArmor, sysctl, nftables, Gateway tarball. Linux only, needs root |
 | `sandboxed-devenv host check` | client host | Runs the canary in the client role as `gw` (through `client exec`) and prints the summary |
 | `sandboxed-devenv client start` | client host | What `gw-run` does: the runtime-dir and Wayland socket ACLs, then `client session` as `gw` through sudo |
 | `sandboxed-devenv client session` | client host | As `gw`: the private Xwayland with its cookie, then the Gateway launcher |
 | `sandboxed-devenv client exec -- CMD` | client host | What `gw-exec` does: run a command as `gw` with its display and cookie |
 | `sandboxed-devenv connect add / rm / ls` | client host | Gateway's `sshConfigs.xml` entry, the `Host` stanza in `gw`'s `ssh_config`, the pinned key in `known_hosts` |
-| `sandboxed-devenv backend prepare` | backend | First boot of an instance: GitHub host keys, git identity, Claude settings, `IdentityAgent none`, then `backend repo add` for each repository listed in `/etc/sandboxed-devenv/instance.yaml` |
+| `sandboxed-devenv backend prepare` | backend | First boot of a project's backend: GitHub host keys, git identity, Claude settings, `IdentityAgent none`, then `backend repo add` for each repository listed in `/etc/sandboxed-devenv/project.yaml` |
 | `sandboxed-devenv backend status [--json]` | backend | cloud-init done, IDE backend registered, package version, repositories with their key fingerprints, SSH host public keys |
 | `sandboxed-devenv backend repo add / rm / rekey / ls` | backend | The VM side of `repo`: mint or delete a repository's key pair and alias stanza, clone or keep the checkout, print the public key as JSON |
 
@@ -323,17 +329,17 @@ Parity with today's rig, then the old scripts go.
       serial, architecture-specific download URLs keyed by `aarch64` and `x86_64`.
       `render.py` reads it; nothing else carries a version string.
 - [ ] Split `rehearsal/utm/backend/user-data.tmpl` into
-      `files/backend/cloudinit-base__user-data.yaml.tmpl` (packages including `pipx`, `gh`
-      apt source, IDE tarball and `registerBackendLocationForGateway`, plugin pre-install,
-      tools, `mise` and `direnv` hooks, the wheel and its `pipx install --global`, then
-      `sandboxed-devenv backend prepare --stage image`) and
-      `files/backend/cloudinit-instance__user-data.yaml.tmpl` (hostname, `dev`'s
-      authorized key, `/etc/sandboxed-devenv/instance.yaml` with the repositories, git
-      identity and the Claude token, then `runcmd: sandboxed-devenv backend prepare`). The
-      backend's own files (the sshd hardening, `dev`'s `ssh_config`, Claude's
-      `settings.json`) move to `files/backend/` with a `stage` in the manifest, and both
-      stages deploy them with the same routine `host install` uses.
-- [ ] `backend_prepare.py`: `backend prepare` does what the instance cloud-init's
+      `files/backend/cloudinit-image__user-data.yaml.tmpl` (packages including `pipx`,
+      `gh` apt source, IDE tarball and `registerBackendLocationForGateway`, plugin
+      pre-install, tools, `mise` and `direnv` hooks, the wheel and its
+      `pipx install --global`, then `sandboxed-devenv backend prepare --stage image`) and
+      `files/backend/cloudinit-project__user-data.yaml.tmpl` (hostname, `dev`'s authorized
+      key, `/etc/sandboxed-devenv/project.yaml` with the repositories, git identity and
+      the Claude token, then `runcmd: sandboxed-devenv backend prepare`). The backend's
+      own files (the sshd hardening, `dev`'s `ssh_config`, Claude's `settings.json`) move
+      to `files/backend/` with a `stage` in the manifest, and both stages deploy them with
+      the same routine `host install` uses.
+- [ ] `backend_prepare.py`: `backend prepare` does what the project cloud-init's
       `runcmd` does today (GitHub host keys from `api.github.com/meta`, git identity,
       Claude `settings.json`, `IdentityAgent none`, then `backend repo add` for each
       listed repository) and is idempotent; `backend status --json` reports cloud-init
@@ -345,9 +351,9 @@ Parity with today's rig, then the old scripts go.
       named by version, Incus publishes an image alias. Rebuilding is forced by a version
       change or `--force`.
 - [ ] `sandboxed-devenv new`, `ls`, `start`, `stop`, `rm`, `clone`, `ssh`, `console`
-      working on the Mac with the UTM driver; the per-instance seed rendered from
-      `cloudinit-instance__user-data.yaml.tmpl`; readiness from `backend status`.
-- [ ] `host_connect.py`: `connect add NAME ADDRESS HOSTKEY` writes the Gateway
+      working on the Mac with the UTM driver; the per-project seed rendered from
+      `cloudinit-project__user-data.yaml.tmpl`; readiness from `backend status`.
+- [ ] `host_connect.py`: `connect add PROJECT ADDRESS HOSTKEY` writes the Gateway
       `sshConfigs.xml` entry (only when Gateway is not running, else print instructions),
       the `Host` stanza in `gw`'s `ssh_config` and the pinned host key in `known_hosts`;
       `connect rm`, `connect ls`. `new` and `rm` call it through `remote.py`.
@@ -365,12 +371,12 @@ Parity with today's rig, then the old scripts go.
 
 ### M3: credentials
 
-- [ ] `control_inventory.py`: one JSON file per instance under the state dir with name,
-      driver, image version, package version, created, a `repos` list (owner/repo,
-      checkout path, access, the key's fingerprint and GitHub id, created) and a
-      `credentials` list for everything else; each entry has kind, scope, fingerprint or
-      id, where it lives, created, the revoke action and its state, `active` or
-      `pending-revoke`.
+- [ ] `control_inventory.py`: one JSON file per project under the state dir with the
+      project name, the backend's VM name, driver, image version, package version,
+      created, a `repos` list (owner/repo, checkout path, access, the key's fingerprint
+      and GitHub id, created) and a `credentials` list for everything else; each entry has
+      kind, scope, fingerprint or id, where it lives, created, the revoke action and its
+      state, `active` or `pending-revoke`.
 - [ ] `control_creds.py`: deploy keys, one per repository (`backend repo add` over SSH
       returns the public key, `gh repo deploy-key add` with `--allow-write` when asked,
       record the key id; `repo rm` runs `gh repo deploy-key delete` before `backend repo
@@ -410,10 +416,10 @@ Parity with today's rig, then the old scripts go.
       `--json` output; inventory round-trips; `policy.yaml` to nftables checked with
       `nft --check` on Linux; `host install --dry-run` plans.
 - [ ] `sandboxed-devenv test provision`: builds or reuses the image,
-      `sandboxed-devenv new ci-NAME`, waits, runs the canary in both roles through
-      `remote.py`, checks SSH from `gw` to the instance, that the backend service is
+      `sandboxed-devenv new ci-<run>`, waits, runs the canary in both roles through
+      `remote.py`, checks SSH from `gw` to the backend, that the backend service is
       present, and that `--version` agrees on the control side, the client host and the
-      instance, then `sandboxed-devenv rm`. Runs on the Mac on demand (`mise run
+      backend, then `sandboxed-devenv rm`. Runs on the Mac on demand (`mise run
       test-provision`) and later on the Framework; never in GitHub CI.
 - [ ] The interactive checklist in `docs/runbook.md`: Gateway, client, Wayland toolkit in
       About, Markdown preview, clipboard both ways, Claude Code `/status`, git fetch
@@ -426,7 +432,7 @@ Parity with today's rig, then the old scripts go.
 
 Written before the laptop arrives, first run on it.
 
-- [ ] `control_driver_incus.py`: `incus launch images:ubuntu/<release>/cloud NAME --vm`
+- [ ] `control_driver_incus.py`: `incus launch images:ubuntu/<release>/cloud <vm> --vm`
       with `cloud-init.user-data` and `cloud-init.network-config` config keys, `incus
       publish` for the base image, `incus copy` for clones, `incus list --format json`
       for state and addresses, `incus console` for the serial console, `incus file pull`
@@ -449,11 +455,11 @@ Written before the laptop arrives, first run on it.
 
 ### M6: later
 
-- [ ] Snapshots before disposal (`sandboxed-devenv snapshot NAME`), so uncommitted work in
-      a project VM is recoverable for a while.
+- [ ] Snapshots before disposal (`sandboxed-devenv snapshot PROJECT`), so uncommitted work
+      in a project VM is recoverable for a while.
 - [ ] Version bump workflow: change `versions.yaml` or the package version,
-      `sandboxed-devenv image build`, `sandboxed-devenv ls` shows which instances run an
-      older image or package; `sandboxed-devenv upgrade NAME` recreates from the new
+      `sandboxed-devenv image build`, `sandboxed-devenv ls` shows which backends run an
+      older image or package; `sandboxed-devenv upgrade PROJECT` recreates from the new
       image with the same credentials policy, or pushes the new wheel and reinstalls when
       only the package changed.
 - [ ] Cloud and service CLIs per project (`aws`, Linode, Terraform) and their scoped
@@ -471,7 +477,7 @@ Written before the laptop arrives, first run on it.
 |---|---|---|
 | M0 scaffold | `mise run verify` green with the package installed and one test | CI |
 | M1 client host | `desk` rebuilt from the slim template with the package installed; `sandboxed-devenv host check` 0 FAIL; Gateway via `client start`; preview and clipboard work | Mac |
-| M2 drivers and backend split | `sandboxed-devenv new` to a connected client on the Mac, the package installed in the instance; old scripts deleted | Mac |
+| M2 drivers and backend split | `sandboxed-devenv new` to a connected client on the Mac, the package installed in the backend; old scripts deleted | Mac |
 | M3 credentials | `sandboxed-devenv new` and `sandboxed-devenv rm` need no manual GitHub or Gateway step | Mac |
 | M4 testing | `mise run test-provision` passes on the Mac unattended, versions matching on all three machines | Mac |
 | M5 Framework | `sandboxed-devenv test provision` passes on the laptop; first real project opened | Framework |
@@ -494,7 +500,7 @@ machine, which is the reason the UTM driver is kept rather than retired.
 - [ ] **State dir.** `~/.local/state/sandboxed-devenv/` for the inventory and
       `~/.config/sandboxed-devenv/` for config and secrets, or everything under one
       directory. Default proposed: the two XDG locations.
-- [ ] **Base image on UTM.** A raw disk copied per instance (simple, what the rig does
+- [ ] **Base image on UTM.** A raw disk copied per backend (simple, what the rig does
       today) versus `utmctl clone` of a stopped base VM (faster, but UTM copies the whole
       bundle). Proposed: raw disk copy, since UTM's clone is not the Framework's path.
 - [ ] **Wheel delivery to Incus VMs.** The cloud-init entry (uniform with UTM) versus
