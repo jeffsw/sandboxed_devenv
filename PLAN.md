@@ -128,14 +128,14 @@ sandboxed_devenv/
   files/                         everything a role receives on disk, plus cloud-init; package data
     manifest.yaml                dest, owner, group, mode, template, stage, description per file
     host/
-      cloudinit__user-data.yaml.tmpl            the desk VM on the Mac rig: install the wheel, host install
+      cloudinit__user-data.yaml.tmpl            the desk VM on the Mac rig: user, rig key; the push does the rest
       etc__apparmor.d__jetbrains-client.apparmor
       etc__nftables.conf.tmpl
       etc__sysctl.d__99-vmrouter.conf
       home__gw__.ssh__config.ssh_config.tmpl
       home__gw__.config__JetBrains__JetBrainsGateway@@GATEWAY_BRANCH@@__options__sshConfigs.xml.tmpl
     backend/
-      cloudinit-image__user-data.yaml.tmpl      the base image: packages, IDE backend, plugin, tools, the wheel
+      cloudinit-image__user-data.yaml.tmpl      the base image: packages, IDE backend, plugin, tools
       cloudinit-project__user-data.yaml.tmpl    a project's backend: hostname, keys, project config, prepare
       cloudinit__network-config.yaml.tmpl
       etc__ssh__sshd_config.d__10-backend.conf
@@ -227,11 +227,13 @@ One mechanism per operating system, and the result is the same everywhere:
   tricks. Ubuntu 26.04 ships pipx 1.8.0; the `--global` option arrived in 1.5.0. Not yet
   confirmed on the rig (both VMs were stopped when the plan was revised); M1 does that.
 - **The Mac:** `uv tool install` from the checkout, since only one user runs it there.
-- **Into a VM:** `render` and `image build` run `uv build`; the wheel rides in the
-  cloud-init as one gzip-and-base64 `write_files` entry (tens of kilobytes, well within
-  NoCloud and Incus limits) and `runcmd` installs it before the role's subcommand runs.
-  Upgrading a running VM is `pipx install --global --force` of a wheel pushed over SSH,
-  or a rebuild.
+- **Into a VM:** over SSH, the one channel both drivers have. `render` and `image build`
+  run `uv build`; the command that created the VM waits for SSH with the rig key, pushes
+  the wheel, runs `sudo pipx install --global` on it (both VM users have passwordless
+  sudo), then runs the role's subcommand. That happens once per base image and once for
+  `desk`; a project's backend inherits the package from the base image and pushes
+  nothing. Upgrading a running VM is the same push with `--force`, or a rebuild. The
+  wheel never rides in a cloud-init document, and `incus file push` is not used.
 - **Versions:** the version lives in `pyproject.toml` and `--version` reads it from the
   installed metadata. `doctor` and `ls` show the version on every host they can reach,
   and `test end-to-end` fails on skew.
@@ -258,7 +260,7 @@ shows where the rig stands.
 - [ ] `uv.lock`; `.mise.toml` gains `_.python.venv = ".venv"` and a `uv sync` task like
       rpkilog's; `lint-python` and a new `test` task run inside the venv.
 - [ ] `render` builds the wheel with `uv build` into `build/`, beside the rendered
-      artifacts; the wheel is what every cloud-init carries from M1 on.
+      artifacts; the wheel is what gets pushed into every VM from M1 on.
 - [ ] `tests/conftest.py` and first tests: `sandboxed-devenv --help` lists every
       subcommand; `--version` matches `pyproject.toml`.
 - [ ] CI: `mise run verify` also runs `pytest`; the workflow installs the package in the
@@ -302,10 +304,11 @@ inside `desk`.
       `sandboxed-devenv render`. `lint-shell` keeps linting the remaining rig scripts
       until M2 deletes them.
 - [ ] `files/host/cloudinit__user-data.yaml.tmpl`, the desk cloud-init, shrinks to:
-      packages (plus `pipx`), the `jsw` user, the rig key, the wheel in one `write_files`
-      entry, and `runcmd`: `pipx install --global` the wheel, then
-      `sandboxed-devenv host install`. This is where pipx 1.8.0's `--global` gets
-      confirmed on Ubuntu 26.04.
+      packages (plus `pipx`), the `jsw` user and the rig key. The rig script (the UTM
+      driver after M2) waits for SSH, pushes the wheel, runs `sudo pipx install --global`
+      and `sudo sandboxed-devenv host install`, the same two commands as the Linux
+      laptop's install day. This is where pipx 1.8.0's `--global` gets confirmed on
+      Ubuntu 26.04.
 - [ ] Rebuild `desk` from the new template; `sandboxed-devenv host check` passes with 0
       FAIL; Gateway starts via `sandboxed-devenv client start`; Markdown preview and
       clipboard still work.
@@ -323,8 +326,9 @@ Parity with today's rig, then the old scripts go.
       a drive and Incus wants config keys.
 - [ ] `remote.py`: run `sandboxed-devenv ...` on the client host (locally when
       `client_host: local`, else over SSH) and on a backend (over SSH as `dev` with
-      the rig key), returning parsed `--json` output. `wait_ready(name)` polls
-      `backend status --json` through it.
+      the rig key), returning parsed `--json` output; `push(path)` copies a file the
+      same way, and `install_wheel(path)` pushes and runs `sudo pipx install --global`.
+      `wait_ready(name)` polls `backend status --json` through it.
 - [ ] `control_driver_utm.py`: port `create-vms.sh` (AppleScript create, plutil for
       keyboard, pointer and clipboard, the UTM relaunch) and `make-seed.sh` (hdiutil
       ISO). Keep the documented UTM 4.7.5 quirks as comments with dates.
@@ -338,8 +342,8 @@ Parity with today's rig, then the old scripts go.
 - [ ] Split `rehearsal/utm/backend/user-data.tmpl` into
       `files/backend/cloudinit-image__user-data.yaml.tmpl` (packages including `pipx`,
       `gh` apt source, IDE tarball and `registerBackendLocationForGateway`, plugin
-      pre-install, tools, `mise` and `direnv` hooks, the wheel and its
-      `pipx install --global`, then `sandboxed-devenv backend prepare --stage image`) and
+      pre-install, tools, `mise` and `direnv` hooks; the package and `backend prepare
+      --stage image` come over SSH from `image build`) and
       `files/backend/cloudinit-project__user-data.yaml.tmpl` (hostname, `dev`'s authorized
       key, `/etc/sandboxed-devenv/project.yaml` with the repositories, git identity and
       the Claude token, then `runcmd: sandboxed-devenv backend prepare`). The backend's
@@ -354,8 +358,9 @@ Parity with today's rig, then the old scripts go.
       their key fingerprints and the SSH host public keys; `backend repo add / rm / rekey
       / ls` as described under "Projects and repositories".
 - [ ] `sandboxed-devenv image build`: grow the cloud image to `disk_gib` (sparse on APFS;
-      the filesystem fills it at first boot), boot it with the base cloud-init, wait,
-      `cloud-init clean --logs`, power off; on UTM the raw disk is kept as
+      the filesystem fills it at first boot), boot it with the base cloud-init, wait for
+      SSH, push and install the wheel, run `backend prepare --stage image`, then
+      `cloud-init clean --logs` and power off; on UTM the raw disk is kept as
       `~/.sandboxed_devenv/images/backend-<version>.img`, on Incus `incus publish` makes
       an image alias. Rebuilding is forced by a version change or `--force`.
 - [ ] `sandboxed-devenv new`, `ls`, `start`, `stop`, `rm`, `clone`, `ssh`,
@@ -433,11 +438,10 @@ Parity with today's rig, then the old scripts go.
 - [ ] `canary.py` gains `--json` output (one object per probe plus a summary) and keeps
       the human output; exit code non-zero on any FAIL (already) and a `--expect FILE`
       mode that compares against a golden result for the role.
-- [ ] Unit tests: renderer golden files for both VMs and both architectures (the wheel
-      entry masked, since it changes with every version); drivers against recorded
-      `utmctl list` and `incus list --format json` output; `remote.py` against recorded
-      `--json` output; inventory round-trips; `policy.yaml` to nftables checked with
-      `nft --check` on Linux; `host install --dry-run` plans.
+- [ ] Unit tests: renderer golden files for both VMs and both architectures; drivers
+      against recorded `utmctl list` and `incus list --format json` output; `remote.py`
+      against recorded `--json` output; inventory round-trips; `policy.yaml` to nftables
+      checked with `nft --check` on Linux; `host install --dry-run` plans.
 - [ ] `sandboxed-devenv test end-to-end`: builds or reuses the image,
       `sandboxed-devenv new ci-<run>`, waits, runs the canary in both roles through
       `remote.py`, checks SSH from `gw` to the backend, that the backend service is
@@ -496,8 +500,8 @@ Written before the laptop arrives, first run on it.
       router-related in the development principal.
 - [ ] The agent-level sandbox inside backend VMs (summary, "Deferred work"), once the rest
       is routine.
-- [ ] A release channel (a PyPI release or a Debian package) if carrying the wheel in
-      cloud-init and installing from the checkout proves tiresome.
+- [ ] A release channel (a PyPI release or a Debian package) if pushing the wheel and
+      installing from the checkout proves tiresome.
 
 ## Order and gates
 
@@ -521,9 +525,9 @@ daily machine, which is the reason the UTM driver is kept rather than retired.
       (devenv.sh, Nix), `devbox` (Jetify), and the short `sdev`, which PyPI already has
       as an active serial-console toolkit that installs a command of that name.
 - [x] **Package install.** Decided 1 November: `pipx install --global` on Linux (`desk`,
-      every backend, the Linux laptop), `uv tool install` on the Mac, and the wheel
-      carried in each VM's cloud-init. Rejected: `uv tool install` from the private
-      repository on the Linux laptop (per user, so invisible to `gw`), and a bare
+      every backend, the Linux laptop), `uv tool install` on the Mac, and the wheel pushed
+      into each VM over SSH (see "Wheel delivery"). Rejected: `uv tool install` from the
+      private repository on the Linux laptop (per user, so invisible to `gw`), and a bare
       `pip install` of the wheel (refused by Ubuntu's externally managed Python).
 - [x] **State dir.** Decided 7 November: one directory, `~/.sandboxed_devenv/`, holding
       `config.yaml`, `inventory/` (one JSON file per project) and `secrets/` (mode 0700,
@@ -539,9 +543,12 @@ daily machine, which is the reason the UTM driver is kept rather than retired.
       32 GiB, sparse), static addresses from a pool, two `/25` routes on `desk`, and
       backend defaults of 4 CPUs and 8 GiB with `--cpus` and `--memory-gib` on `new` and
       `resources`. Adjustable disk size is future work (M6).
-- [ ] **Wheel delivery to Incus VMs.** The cloud-init entry (uniform with UTM) versus
-      `incus file push` after launch (no size concern, one more driver step). Proposed:
-      the cloud-init entry, with the push as the fallback if Incus objects to the size.
+- [x] **Wheel delivery.** Decided 7 November: over SSH with the rig key, for both
+      drivers, by the command that created the VM: once into the base image, once into
+      `desk`, never into a project's backend, which inherits the package. Rejected: the
+      wheel as a base64 entry in cloud-init (large documents, a size question on Incus,
+      failures visible only on the serial console), and `incus file push` (a second
+      path for one driver when SSH serves both).
 - [ ] **Binding a key to its repository inside the VM.** An alias stanza per repository
       in `dev`'s `ssh_config` (works for any git command from any directory, needs the
       alias in the remote URL) versus `core.sshCommand` set per checkout (plain URLs, but
