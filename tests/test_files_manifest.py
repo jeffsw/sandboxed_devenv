@@ -18,7 +18,7 @@ ENTRIES = []
 for role_, entries_ in MANIFEST.items():
     for name_ in entries_:
         ENTRIES.append((role_, name_))
-TEST_VALUES = render.default_values(RIG_PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA test")
+TEST_VALUES = render.sample_values(RIG_PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA test")
 # What may follow the encoded destination in a name: an added format extension, then .tmpl.
 NAME_TAIL = re.compile(r"(\.[a-z][a-z0-9_]*)?(\.tmpl)?")
 
@@ -142,6 +142,32 @@ def test_render_role_writes_the_tree(tmp_path):
     gateway_dir = tmp_path / "host" / "files" / "home" / "gw" / ".config" / "JetBrains" / f"JetBrainsGateway{branch}"
     assert (gateway_dir / "options" / "sshConfigs.xml").is_file()
     assert TEST_VALUES["RIG_PUBKEY"] in (tmp_path / "host" / "cloudinit" / "user-data").read_text()
+
+
+def test_render_role_backend_writes_both_stages(tmp_path):
+    written = render.render_role("backend", TEST_VALUES, tmp_path)
+    assert (tmp_path / "backend" / "cloudinit-image" / "user-data") in written
+    assert (tmp_path / "backend" / "cloudinit-project" / "user-data") in written
+    assert (tmp_path / "backend" / "cloudinit" / "network-config") in written
+    settings = (tmp_path / "backend" / "files" / "home" / "dev" / ".claude" / "settings.json").read_text()
+    assert '"env": {}' in settings
+    project_doc = yaml.safe_load((tmp_path / "backend" / "cloudinit-project" / "user-data").read_text())
+    assert project_doc["hostname"] == TEST_VALUES["HOSTNAME"]
+    assert project_doc["write_files"][0]["path"] == "/etc/sandboxed-devenv/project.yaml"
+
+
+def test_project_values_carry_the_token_only_when_given():
+    from sandboxed_devenv import config
+
+    project = render.sample_project()
+    assert render.project_values(project, "h")["CLAUDE_ENV_JSON"] == "{}"
+    project.claude_oauth_token = "tok"
+    values = render.project_values(project, "h", "192.168.64.21")
+    assert "tok" in values["CLAUDE_ENV_JSON"]
+    assert values["ADDRESS"] == "192.168.64.21"
+    import base64
+
+    assert config.ProjectConfig(**yaml.safe_load(base64.b64decode(values["PROJECT_YAML_B64"]))).claude_oauth_token == "tok"
 
 
 def test_render_needs_the_rig_key(tmp_path, monkeypatch, capsys):

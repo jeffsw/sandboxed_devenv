@@ -1,0 +1,12 @@
+# sandboxed-devenv backend: copied to /home/dev/.ssh/config
+# One file per repository under config.d/, written by `backend repo add`: an alias
+# `Host github.com-<owner>-<repo>` bound to that repository's deploy key with IdentitiesOnly,
+# and the checkout's remote uses the alias (PLAN.md, "Projects and repositories").
+Include config.d/*.conf
+# No agent, ever: the IDE backend offers git an agent socket that proxies to the client, and
+# OpenSSH asks any agent about the configured identity even with IdentitiesOnly. That query
+# alone makes the client show its "Provide SSH Key Access" dialog (seen 9 October 2026).
+# Nothing in this VM may fetch keys from the client.
+Host *
+    ForwardAgent no
+    IdentityAgent none

@@ -1,0 +1,36 @@
+# sandboxed-devenv: every version the tool pins, in one place (PLAN.md, M2). render.py reads
+# it and hands the values to the templates; `host install` and `backend prepare` take the
+# versions from here too, so nothing else carries a version string. Package data, so each
+# installed copy carries the pins it was built with. Download URLs are keyed by the CPU
+# architecture as `uname -m` reports it; `{version}` and `{serial}` are filled in.
+gateway:
+  # The launcher the client sandbox runs. 2026.2.2 ships no toolkit option; `host install`
+  # appends -Dawt.toolkit.name=auto so it starts on Wayland.
+  version: "2026.2.2"
+  download:
+    aarch64: "https://download.jetbrains.com/idea/gateway/JetBrainsGateway-{version}-aarch64.tar.gz"
+    x86_64: "https://download.jetbrains.com/idea/gateway/JetBrainsGateway-{version}.tar.gz"
+ide_backend:
+  # IntelliJ IDEA Ultimate, unpacked under /opt/jetbrains/idea in the base image and
+  # registered with registerBackendLocationForGateway. Pin 2026.2 or later: its JetBrains
+  # Client draws on Wayland.
+  product: ideaIU
+  version: "2026.2.3"
+  download:
+    aarch64: "https://download.jetbrains.com/idea/ideaIU-{version}-aarch64.tar.gz"
+    x86_64: "https://download.jetbrains.com/idea/ideaIU-{version}.tar.gz"
+  # Pre-installed into the backend so the client needs no plugin install and no restart.
+  plugins:
+    - com.anthropic.code.plugin
+client:
+  # Informational: the JetBrains Client build that matches the IDE backend above. Gateway
+  # downloads it into the client sandbox by itself.
+  build: "262.10968.63"
+ubuntu:
+  release: "26.04"
+  codename: resolute
+  # The server cloud image the base image is built from; the serial names the daily build.
+  image_serial: "20260927"
+  cloud_image:
+    aarch64: "https://cloud-images.ubuntu.com/releases/26.04/release-{serial}/ubuntu-26.04-server-cloudimg-arm64.img"
+    x86_64: "https://cloud-images.ubuntu.com/releases/26.04/release-{serial}/ubuntu-26.04-server-cloudimg-amd64.img"
