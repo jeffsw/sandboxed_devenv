@@ -43,7 +43,7 @@ copied around and no remote configuration is edited by hand.
 
 | Role | On the Mac rig | On the Linux laptop | Subcommands |
 |---|---|---|---|
-| control | the Mac | the laptop | `image`, `new`, `ls`, `start`, `stop`, `rm`, `clone`, `repo`, `ssh`, `serial-console`, `creds`, `test` |
+| control | the Mac | the laptop | `image`, `new`, `ls`, `start`, `stop`, `rm`, `clone`, `resources`, `repo`, `ssh`, `serial-console`, `creds`, `test` |
 | client host | the `desk` VM | the laptop | `host`, `client`, `connect` |
 | backend | each backend VM under UTM | each backend VM under Incus | `backend` |
 | any | every machine above | every machine above | `doctor`, `render`, `canary`, `--version` |
@@ -189,10 +189,11 @@ it is and whether it is rendered:
 | `sandboxed-devenv canary --role ROLE [--json]` | any | The probes for the client or backend role, run locally |
 | `sandboxed-devenv image build [--force]` | control | Downloads the Ubuntu cloud image, boots it with the base cloud-init (which installs the package), waits, runs `cloud-init clean`, powers off, registers the base image |
 | `sandboxed-devenv image ls / rm` | control | Base images and their versions |
-| `sandboxed-devenv new PROJECT [--repo OWNER/REPO]... [--disposable] [--deploy-key-grants-repo-write]` | control | Launches the backend for PROJECT from the base image with its own cloud-init, waits for `backend status` to report ready, runs `repo add` for each `--repo`, pins the host key, runs `connect add` on the client host, records everything in the inventory. `--repo` is optional and repeatable; repositories can be added later. `--disposable` marks the backend for stranger code, used once and destroyed (summary 4.7): `ls` flags it and `rm` takes no snapshot. `--deploy-key-grants-repo-write` applies to every `--repo` given and registers its key with write access (`gh repo deploy-key add --allow-write`) so the VM can push; the default key is read-only |
-| `sandboxed-devenv ls` | control | Projects with their backend's state, address, repositories, package version, credential ages |
+| `sandboxed-devenv new PROJECT [--repo OWNER/REPO]... [--disposable] [--deploy-key-grants-repo-write] [--cpus N] [--memory-gib N]` | control | Launches the backend for PROJECT from the base image with its own cloud-init, waits for `backend status` to report ready, runs `repo add` for each `--repo`, pins the host key, runs `connect add` on the client host, records everything in the inventory. `--repo` is optional and repeatable; repositories can be added later. `--disposable` marks the backend for stranger code, used once and destroyed (summary 4.7): `ls` flags it and `rm` takes no snapshot. `--deploy-key-grants-repo-write` applies to every `--repo` given and registers its key with write access (`gh repo deploy-key add --allow-write`) so the VM can push; the default key is read-only. `--cpus` and `--memory-gib` override the defaults in `config.yaml` (4 and 8) |
+| `sandboxed-devenv ls` | control | Projects with their backend's state, address, CPUs and memory, repositories, package version, credential ages |
 | `sandboxed-devenv start / stop / rm PROJECT` | control | Lifecycle of the project's backend; `rm` revokes every credential the inventory lists and runs `connect rm`, then deletes the VM |
 | `sandboxed-devenv clone PROJECT NEW_PROJECT` | control | A disposable backend for NEW_PROJECT copied from PROJECT's; every repository in the copy gets a fresh key pair through `backend repo rekey`, registered under the new project's name |
+| `sandboxed-devenv resources PROJECT [--cpus N] [--memory-gib N] [--yes]` | control | Shows the backend's CPUs and memory, or changes them. Applied live where the driver can; otherwise the command asks before stopping and starting the backend, and `--yes` answers for scripts. Disk size is future work |
 | `sandboxed-devenv repo add PROJECT OWNER/REPO [--deploy-key-grants-repo-write] [--no-clone]` | control | Mints a key pair for the repository in the VM (`backend repo add`), registers it with `gh repo deploy-key add`, records it in the inventory, clones to `~/proj/PROJECT/REPO` |
 | `sandboxed-devenv repo rm PROJECT OWNER/REPO [--delete-checkout]` | control | Revokes the key on GitHub, then removes it and its alias stanza in the VM; the checkout stays unless asked |
 | `sandboxed-devenv repo ls PROJECT` | control | The project's repositories with key fingerprint, access and age |
@@ -330,6 +331,10 @@ Parity with today's rig, then the old scripts go.
 - [ ] `versions.yaml`: Gateway, IDE backend, client build, Ubuntu release and image
       serial, architecture-specific download URLs keyed by `aarch64` and `x86_64`.
       `render.py` reads it; nothing else carries a version string.
+- [ ] `config.yaml` model in `config.py`: `client_host`, `vm_name_prefix`, backend
+      defaults (`cpus: 4`, `memory_gib: 8`, `disk_gib: 32`), and the UTM address pool
+      (`192.168.64.20` upward; `.1` is the Mac, `.10` is `desk`). Each backend's address,
+      CPUs and memory are recorded in the inventory when it is created.
 - [ ] Split `rehearsal/utm/backend/user-data.tmpl` into
       `files/backend/cloudinit-image__user-data.yaml.tmpl` (packages including `pipx`,
       `gh` apt source, IDE tarball and `registerBackendLocationForGateway`, plugin
@@ -348,14 +353,27 @@ Parity with today's rig, then the old scripts go.
       state, the IDE backend registration, the package version, the repositories with
       their key fingerprints and the SSH host public keys; `backend repo add / rm / rekey
       / ls` as described under "Projects and repositories".
-- [ ] `sandboxed-devenv image build`: boot the cloud image with the base cloud-init, wait,
-      `cloud-init clean --logs`, power off; UTM keeps the raw disk under `build/images/`
-      named by version, Incus publishes an image alias. Rebuilding is forced by a version
-      change or `--force`.
+- [ ] `sandboxed-devenv image build`: grow the cloud image to `disk_gib` (sparse on APFS;
+      the filesystem fills it at first boot), boot it with the base cloud-init, wait,
+      `cloud-init clean --logs`, power off; on UTM the raw disk is kept as
+      `~/.sandboxed_devenv/images/backend-<version>.img`, on Incus `incus publish` makes
+      an image alias. Rebuilding is forced by a version change or `--force`.
 - [ ] `sandboxed-devenv new`, `ls`, `start`, `stop`, `rm`, `clone`, `ssh`,
-      `serial-console` working on the Mac with the UTM driver; the per-project seed
-      rendered from `cloudinit-project__user-data.yaml.tmpl`; readiness from
-      `backend status`.
+      `serial-console` working on the Mac with the UTM driver: `new` copies the base
+      image (an APFS clone, instant and block-sharing) and creates the VM through
+      AppleScript with the copy, the project's seed ISO, and the CPUs and memory asked
+      for; the per-project seed rendered from `cloudinit-project__user-data.yaml.tmpl`;
+      readiness from `backend status`.
+- [ ] Routing on `desk` for several backends: the desk template carries two `/25` routes
+      via the Mac, more specific than the on-link `/24`, so every backend is reachable
+      without a per-backend change. Verified as part of the gate; the fallback is a `/32`
+      per backend added by `connect add`.
+- [ ] `sandboxed-devenv resources PROJECT`: show or change a backend's CPUs and memory
+      after creation. UTM: with the backend stopped, through the AppleScript configuration
+      update, or the plist edit and UTM relaunch the rig knows if 4.7.5 lacks it. Incus:
+      `incus config set` of `limits.cpu` and `limits.memory`, live where Incus allows.
+      When a stop is needed the command says so and asks before stopping and starting
+      the backend; `--yes` answers for scripts. The inventory and `ls` follow the change.
 - [ ] `host_connect.py`: `connect add PROJECT ADDRESS HOSTKEY` writes the Gateway
       `sshConfigs.xml` entry (only when Gateway is not running, else print instructions),
       the `Host` stanza in `gw`'s `ssh_config` and the pinned host key in `known_hosts`;
@@ -463,6 +481,8 @@ Written before the laptop arrives, first run on it.
 
 ### M6: later
 
+- [ ] Adjustable backend disk size after creation: grow the raw disk or the Incus volume,
+      then the filesystem inside, through `resources --disk-gib`.
 - [ ] Snapshots before disposal (`sandboxed-devenv snapshot PROJECT`), so uncommitted work
       in a project VM is recoverable for a while.
 - [ ] Version bump workflow: change `versions.yaml` or the package version,
@@ -510,9 +530,15 @@ daily machine, which is the reason the UTM driver is kept rather than retired.
       one file per secret). Secrets never appear in `config.yaml`, only optional `op://`
       references, so configuration and secrets can be managed separately. Rejected: the
       two XDG locations, which spread one tool's state over two trees.
-- [ ] **Base image on UTM.** A raw disk copied per backend (simple, what the rig does
-      today) versus `utmctl clone` of a stopped base VM (faster, but UTM copies the whole
-      bundle). Proposed: raw disk copy, since UTM's clone is not the Linux laptop's path.
+- [x] **Base image on UTM.** Decided 7 November: the base image is a raw disk file,
+      `~/.sandboxed_devenv/images/backend-<version>.img`, and each backend is an APFS
+      clone of it attached to a VM the driver creates through AppleScript with the
+      project's seed and resources, as the rig does today. Rejected: `utmctl clone` of a
+      stopped base VM, whose copy keeps the base seed drive and needs plist edits and a
+      UTM relaunch afterwards. Settled with it: disk size from `config.yaml` (default
+      32 GiB, sparse), static addresses from a pool, two `/25` routes on `desk`, and
+      backend defaults of 4 CPUs and 8 GiB with `--cpus` and `--memory-gib` on `new` and
+      `resources`. Adjustable disk size is future work (M6).
 - [ ] **Wheel delivery to Incus VMs.** The cloud-init entry (uniform with UTM) versus
       `incus file push` after launch (no size concern, one more driver step). Proposed:
       the cloud-init entry, with the push as the fallback if Incus objects to the size.
