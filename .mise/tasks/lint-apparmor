@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-#MISE description="apparmor_parser syntax check of the client profiles in the desk seed (Linux; skipped elsewhere unless REQUIRE_LINUX_VALIDATORS=1)"
-#MISE depends=["extract"]
+#MISE description="apparmor_parser syntax check of the client host's profiles as rendered (Linux; skipped elsewhere unless REQUIRE_LINUX_VALIDATORS=1)"
+#MISE depends=["render"]
 set -euo pipefail
 cd "$MISE_PROJECT_ROOT"
-profile=rehearsal/utm/build/extracted/desk/etc/apparmor.d/jetbrains-client
+profile=build/host/files/etc/apparmor.d/jetbrains-client
 if ! command -v apparmor_parser >/dev/null 2>&1; then
     if [ "${REQUIRE_LINUX_VALIDATORS:-0}" = "1" ]; then
         echo "lint-apparmor: apparmor_parser is not installed and REQUIRE_LINUX_VALIDATORS=1" >&2
@@ -15,7 +15,7 @@ fi
 # The profiles declare the AppArmor 5 abi (Ubuntu 26.04). On a host with an older
 # parser the abi file is absent; the syntax is otherwise identical, so check with
 # the newest abi the host has.
-check=rehearsal/utm/build/extracted/desk/jetbrains-client.check
+check=build/host/jetbrains-client.check
 # Numeric abi files only (3.0, 4.0, 5.0); the kernel-* ones are not what profiles declare.
 abi=$(for f in /etc/apparmor.d/abi/*; do [ -e "$f" ] && basename "$f"; done | grep -E '^[0-9]+\.[0-9]+$' | sort -V | tail -1)
 sed "s#abi <abi/5.0>,#abi <abi/${abi:-5.0}>,#" "$profile" > "$check"
