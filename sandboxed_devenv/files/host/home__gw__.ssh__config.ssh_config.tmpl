@@ -1,0 +1,11 @@
+# sandboxed-devenv host: rendered to /home/gw/.ssh/config
+# The client sandbox knows the backend VMs and nothing else. From M2, `connect add` manages
+# one stanza per project; until then the rehearsal backend is the one entry.
+Host backend
+    HostName @@BACKEND_ADDRESS@@
+    User dev
+    IdentityFile ~/.ssh/vm_ed25519
+    IdentitiesOnly yes
+Host *
+    ForwardAgent no
+    AddKeysToAgent no
