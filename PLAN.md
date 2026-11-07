@@ -549,12 +549,12 @@ daily machine, which is the reason the UTM driver is kept rather than retired.
       wheel as a base64 entry in cloud-init (large documents, a size question on Incus,
       failures visible only on the serial console), and `incus file push` (a second
       path for one driver when SSH serves both).
-- [ ] **Binding a key to its repository inside the VM.** An alias stanza per repository
-      in `dev`'s `ssh_config` (works for any git command from any directory, needs the
-      alias in the remote URL) versus `core.sshCommand` set per checkout (plain URLs, but
-      only inside that checkout; submodules and fresh clones miss it). Proposed: the
-      alias stanza, written by `backend repo add`, with the checkout's remote pointing
-      at it.
+- [x] **Binding a key to its repository inside the VM.** Decided 7 November: an alias
+      stanza per repository in `dev`'s `ssh_config` (`Host github.com-<owner>-<repo>`,
+      `IdentitiesOnly yes`), written by `backend repo add`, with the checkout's remote
+      pointing at the alias; it works for any git command from any directory. Rejected:
+      `core.sshCommand` set per checkout, which keeps plain URLs but applies only inside
+      that checkout, so submodules and fresh clones miss it.
 - [ ] **Incus storage.** Directory, btrfs or ZFS pool on the Linux laptop; affects the
       partitioning on install day. Proposed: btrfs on its own volume.
 - [ ] **Host distribution.** Ubuntu 26.04 is assumed throughout (AppArmor profiles,
