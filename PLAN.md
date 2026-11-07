@@ -4,26 +4,36 @@ Status: proposal, 23 October 2026, revised 1 November so that one package, insta
 every machine involved, carries every entry point. The design itself is in
 `ide_sandboxing_summary.md`; this file is the implementation plan for turning the
 rehearsal rig into an installable tool that runs the same way on the Mac (UTM) and on the
-Framework laptop (Incus).
+Linux laptop (Incus).
 
 ## Goal
 
-One Python package, `sandboxed_devenv`, with one command, `sandboxed-devenv`, installed
-wherever Python runs for this project: the control machine, the client host, and every
-backend VM. `sandboxed-devenv --help` is the starting point on each of them. The command
-manages three things:
+Keep the developer's laptop, and everything on it, out of reach of the code it works on.
+A repository may pull in a compromised dependency, or may itself be the attack:
+recruiting scams hand developers "take-home" repositories that are malware. Every project
+opens in its own virtual machine with only the materials that project needs: its
+checkouts, one deploy key per repository and one model token. The laptop itself and every
+other project stay out of the VM's reach, so a compromise is confined to one project's
+materials and ends when the VM is deleted.
 
-1. **The host**: the client sandbox (`gw` user, its launcher, the AppArmor profile, the
-   egress rules) and the VM platform. On the Framework the host is the laptop; on the Mac
-   it is the `desk` VM, which is what keeps the Mac useful as a test bed.
-2. **Backend VMs**: a base image built once from the backend cloud-init, and one backend
-   per project launched from it in seconds, holding that project's repositories with a
-   credential per repository, plus disposable clones.
-3. **Provisioning and verification**: rendering every artifact without side effects (for
-   CI), building and checking VMs headlessly (for the Mac and later the Framework), and
-   the canary as the assertion library.
+One Python package, `sandboxed_devenv`, with one command, `sandboxed-devenv`, installed on
+every machine that takes part (the Roles table below), gives the developer:
 
-Platform differences live in one driver layer. Everything above it is shared.
+- **A sandboxed IDE client** on the laptop: the thin client as a second user with the
+  display socket and nothing else.
+- **One backend VM per project**, launched in seconds from a base image, holding the
+  project's repositories, and deleted as freely as it was made.
+- **Credential management**: a deploy key per repository, minted inside the VM,
+  registered and revoked from the laptop as repositories are added and removed, rotated
+  on demand.
+- **An inventory** of every backend and every credential with its GitHub id and state, so
+  nothing is orphaned when a backend goes, and `creds audit` can prove it.
+- **Reproducible provisioning**: every artifact rendered without side effects for CI, VMs
+  built and checked headlessly, and the canary as the assertion that the sandbox holds.
+
+Platform differences live in one driver layer, UTM on the Mac and Incus on the Linux
+laptop. Everything above it is shared, and `sandboxed-devenv --help` is the starting point
+on every machine.
 
 ## Roles
 
@@ -31,14 +41,14 @@ Each machine plays one or more roles and runs the subcommands for those roles. T
 control side reaches the other two by running the same command over SSH, so no files are
 copied around and no remote configuration is edited by hand.
 
-| Role | On the Mac rig | On the Framework | Subcommands |
+| Role | On the Mac rig | On the Linux laptop | Subcommands |
 |---|---|---|---|
 | control | the Mac | the laptop | `image`, `new`, `ls`, `start`, `stop`, `rm`, `clone`, `repo`, `ssh`, `serial-console`, `creds`, `test` |
 | client host | the `desk` VM | the laptop | `host`, `client`, `connect` |
 | backend | each backend VM under UTM | each backend VM under Incus | `backend` |
 | any | every machine above | every machine above | `doctor`, `render`, `canary`, `--version` |
 
-The user config names the client host: `client_host: local` on the Framework,
+The user config names the client host: `client_host: local` on the Linux laptop,
 `client_host: ssh://jsw@192.168.64.10` on the Mac. `doctor` reports which roles the
 machine it runs on can play, and a subcommand run in the wrong place says so and exits 1.
 
@@ -135,7 +145,7 @@ tests/                           pytest, one test module per package module, as 
 ci/                              puppeteer config for the Mermaid check (from rehearsal/ci/)
 docs/
   runbook.md                     install, new project, dispose, rotate, troubleshoot
-  framework-install.md           the laptop's first day, step by step
+  linux-laptop-install.md        the laptop's first day, step by step
 policy.yaml                      egress allowlists and the VM subnet
 versions.yaml                    Gateway, IDE backend, client, Ubuntu image serial, tool versions
 ```
@@ -221,7 +231,7 @@ it is and whether it is rendered, and the file itself says so too.
 One mechanism per operating system, and the result is the same everywhere:
 `sandboxed-devenv` on the PATH of every user that needs it.
 
-- **Linux, which is `desk`, every backend VM and the Framework:** `sudo pipx install
+- **Linux, which is `desk`, every backend VM and the Linux laptop:** `sudo pipx install
   --global WHEEL_OR_CHECKOUT`. The venv lands under `/opt/pipx` and the command in
   `/usr/local/bin`, readable by `jsw`, `gw`, `dev` and root, and inside sudo's
   `secure_path`, so `sudo -u gw sandboxed-devenv client session` resolves without PATH
@@ -271,7 +281,7 @@ shows where the rig stands.
 ### M1: the client host as subcommands
 
 The first payoff on both machines: real files instead of base64 blobs, the `gw` helpers
-as subcommands of the one command, and one installer that runs on the Framework and
+as subcommands of the one command, and one installer that runs on the Linux laptop and
 inside `desk`.
 
 - [ ] Move the configuration `write_files` entries of `rehearsal/utm/desk/user-data.tmpl`
@@ -366,7 +376,7 @@ Parity with today's rig, then the old scripts go.
       backend egress (GitHub, package indexes, Anthropic), the VM subnet.
       `sandboxed-devenv render` produces the host nftables ruleset from it; on the Mac the
       same ruleset lands on `desk` for the client half only, since UTM's private shared
-      network cannot route the VMs through `desk` (known gap, Framework only).
+      network cannot route the VMs through `desk` (known gap, Linux laptop only).
 - [ ] Replace the 4.9 command blocks in the summary with `sandboxed-devenv` commands;
       delete `rehearsal/utm/` (`make-seed.sh`, `create-vms.sh`, `render.py` and the
       templates) and the `lint-shell` task with it; move `rehearsal/ci/` to `ci/`; the
@@ -425,7 +435,7 @@ Parity with today's rig, then the old scripts go.
       `remote.py`, checks SSH from `gw` to the backend, that the backend service is
       present, and that `--version` agrees on the control side, the client host and the
       backend, then `sandboxed-devenv rm`. Runs on the Mac on demand (`mise run test-e2e`)
-      and later on the Framework; never in GitHub CI. `test host` and
+      and later on the Linux laptop; never in GitHub CI. `test host` and
       `test backend PROJECT` are the cheap siblings: no VM is created and they run in
       seconds.
 - [ ] The interactive checklist in `docs/runbook.md`: Gateway, client, Wayland toolkit in
@@ -435,7 +445,7 @@ Parity with today's rig, then the old scripts go.
 - [x] Static verification in CI: schema, AppArmor and nftables parsers, shell, Python,
       YAML, workflow, doc rules and Mermaid rendering.
 
-### M5: the Framework
+### M5: the Linux laptop
 
 Written before the laptop arrives, first run on it.
 
@@ -448,15 +458,16 @@ Written before the laptop arrives, first run on it.
       and the forward chain on the Incus bridge for the VMs. Incus network ACLs are the
       alternative if the bridge rules fight with Incus's own firewall management; decide
       on the laptop.
-- [ ] `docs/framework-install.md`: Ubuntu 26.04 per Framework's guide, full-disk
-      encryption, a separate volume for the Incus storage pool, the operations user or VM
-      for router access (summary section 5), then the package: `sudo pipx install
-      --global ~/proj/ide_sandbox/sandboxed_devenv`, `client_host: local` in the
-      config, `sudo sandboxed-devenv host install`, `sandboxed-devenv image build`,
-      `sandboxed-devenv new` for the first project, `sandboxed-devenv host check`.
+- [ ] `docs/linux-laptop-install.md`: Ubuntu 26.04 (per Framework's guide on the 13 Pro),
+      full-disk encryption, a separate volume for the Incus storage pool, the operations
+      user or VM for router access (summary section 5), then the package:
+      `sudo pipx install --global ~/proj/ide_sandbox/sandboxed_devenv`,
+      `client_host: local` in the config, `sudo sandboxed-devenv host install`,
+      `sandboxed-devenv image build`, `sandboxed-devenv new` for the first project,
+      `sandboxed-devenv host check`.
 - [ ] Run `sandboxed-devenv test end-to-end` on the laptop; record timings in the summary
       (step 6 of 4.9 asked for them).
-- [ ] The Framework's AppArmor and userns state is the same Ubuntu 26.04 default as
+- [ ] The Linux laptop's AppArmor and userns state is the same Ubuntu 26.04 default as
       `desk`; verify the profiles load and the client's embedded browser works before
       declaring the host done.
 
@@ -487,11 +498,11 @@ Written before the laptop arrives, first run on it.
 | M2 drivers and backend split | `sandboxed-devenv new` to a connected client on the Mac, the package installed in the backend; old scripts deleted | Mac |
 | M3 credentials | `sandboxed-devenv new` and `sandboxed-devenv rm` need no manual GitHub or Gateway step | Mac |
 | M4 testing | `mise run test-e2e` passes on the Mac unattended, versions matching on all three machines | Mac |
-| M5 Framework | `sandboxed-devenv test end-to-end` passes on the laptop; first real project opened | Framework |
+| M5 Linux laptop | `sandboxed-devenv test end-to-end` passes on the laptop; first real project opened | Linux laptop |
 
 M1 through M4 run on the Mac rig as it exists today, two UTM VMs, no nested
-virtualization. The Mac remains the place to test changes after the Framework is the daily
-machine, which is the reason the UTM driver is kept rather than retired.
+virtualization. The Mac remains the place to test changes after the Linux laptop is the
+daily machine, which is the reason the UTM driver is kept rather than retired.
 
 ## Open decisions
 
@@ -500,16 +511,16 @@ machine, which is the reason the UTM driver is kept rather than retired.
       (devenv.sh, Nix), `devbox` (Jetify), and the short `sdev`, which PyPI already has
       as an active serial-console toolkit that installs a command of that name.
 - [x] **Package install.** Decided 1 November: `pipx install --global` on Linux (`desk`,
-      every backend, the Framework), `uv tool install` on the Mac, and the wheel carried
-      in each VM's cloud-init. Rejected: `uv tool install` from the private repository on
-      the Framework (per user, so invisible to `gw`), and a bare `pip install` of the
-      wheel (refused by Ubuntu's externally managed Python).
+      every backend, the Linux laptop), `uv tool install` on the Mac, and the wheel
+      carried in each VM's cloud-init. Rejected: `uv tool install` from the private
+      repository on the Linux laptop (per user, so invisible to `gw`), and a bare
+      `pip install` of the wheel (refused by Ubuntu's externally managed Python).
 - [ ] **State dir.** `~/.local/state/sandboxed-devenv/` for the inventory and
       `~/.config/sandboxed-devenv/` for config and secrets, or everything under one
       directory. Default proposed: the two XDG locations.
 - [ ] **Base image on UTM.** A raw disk copied per backend (simple, what the rig does
       today) versus `utmctl clone` of a stopped base VM (faster, but UTM copies the whole
-      bundle). Proposed: raw disk copy, since UTM's clone is not the Framework's path.
+      bundle). Proposed: raw disk copy, since UTM's clone is not the Linux laptop's path.
 - [ ] **Wheel delivery to Incus VMs.** The cloud-init entry (uniform with UTM) versus
       `incus file push` after launch (no size concern, one more driver step). Proposed:
       the cloud-init entry, with the push as the fallback if Incus objects to the size.
@@ -519,7 +530,7 @@ machine, which is the reason the UTM driver is kept rather than retired.
       only inside that checkout; submodules and fresh clones miss it). Proposed: the
       alias stanza, written by `backend repo add`, with the checkout's remote pointing
       at it.
-- [ ] **Incus storage.** Directory, btrfs or ZFS pool on the Framework; affects the
+- [ ] **Incus storage.** Directory, btrfs or ZFS pool on the Linux laptop; affects the
       partitioning on install day. Proposed: btrfs on its own volume.
 - [ ] **Host distribution.** Ubuntu 26.04 is assumed throughout (AppArmor profiles,
       Framework's certification). Changing it reopens M1.
