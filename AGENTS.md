@@ -13,7 +13,8 @@ Claude, for humans and in GitHub CI. Tool versions are pinned in `.mise.toml`.
 - `mise run test`: pytest in the project venv; extra arguments after `--`, e.g. `-- -k cli`.
 - `mise run sync`: `uv sync --locked`, the venv with the package (editable) and the dev group.
 - `mise run lint-python`: ruff plus a syntax check of every Python file.
-- `mise run render`: the rendered cloud-init seeds, which the other checks read.
+- `mise run render`: `sandboxed-devenv render` (files/ and the wheel under `build/`) and the
+  cloud-init seeds under `rehearsal/utm/build/`, which the other checks read.
 
 The Linux-only validators (`cloud-init schema`, `apparmor_parser`, `nft`) are skipped on macOS
 with a notice; CI runs on Linux and requires them.
@@ -25,8 +26,8 @@ Don't ask which verification to run.
 
 - Commit messages: a one-line subject, then bullet points rather than prose when there is
   more to say.
-- Never commit `rehearsal/utm/keys/` or `build/`; secrets never enter rendered artifacts,
-  CI output or commits. Don't repeat a secret in chat if one was printed by mistake.
+- Never commit `build/` or any key material; secrets live in `~/.sandboxed_devenv/secrets/`,
+  outside the checkout, and never enter rendered artifacts, CI output or commits. Don't repeat a secret in chat if one was printed by mistake.
 - Don't merge to `main`; the user opens and merges pull requests.
 
 ## Python

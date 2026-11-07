@@ -1,7 +1,7 @@
 [env]
-# Nothing secret here; this file is committed. The rehearsal's secrets live in
-# rehearsal/utm/keys/ (gitignored): the rig key pair and, optionally, a Claude
-# Code token that make-seed.sh folds into the backend's settings.
+# Nothing secret here; this file is committed. The rig's secrets live outside the
+# checkout in ~/.sandboxed_devenv/secrets/: the rig key pair and, optionally, a
+# Claude Code token that make-seed.sh folds into the backend's settings.
 # The project venv, so pytest and the sandboxed-devenv command are on PATH in a shell
 # with mise activated. uv creates it (`mise run sync`); mise must not, or the two can
 # pick different interpreters and uv rebuilds the venv on every run.
@@ -19,7 +19,7 @@ shellcheck = "0.11.0"
 ruff = "0.16.10"
 actionlint = "1.7.12"
 "pipx:yamllint" = "1.38.0"
-# uv: runs extract-files.py with PyYAML, and backs the pipx backend above.
+# uv: the project venv (mise run sync), and the pipx backend above.
 uv = "0.13.0"
 # node: the Mermaid CLI check of the summary's diagrams (npx). Same pin as packetcount.
 node = "24.19.0"

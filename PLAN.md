@@ -229,8 +229,9 @@ One mechanism per operating system, and the result is the same everywhere:
   --global WHEEL_OR_CHECKOUT`. The venv lands under `/opt/pipx` and the command in
   `/usr/local/bin`, readable by `jsw`, `gw`, `dev` and root, and inside sudo's
   `secure_path`, so `sudo -u gw sandboxed-devenv client session` resolves without PATH
-  tricks. Ubuntu 26.04 ships pipx 1.8.0; the `--global` option arrived in 1.5.0. Not yet
-  confirmed on the rig (both VMs were stopped when the plan was revised); M1 does that.
+  tricks. Ubuntu 26.04 ships pipx 1.8.0; the `--global` option arrived in 1.5.0. Confirmed
+  on a fresh `desk` on 7 November: the wheel installed under Python 3.14.4, the command was
+  on root's and `jsw`'s PATH, and `host install` ran from it.
 - **The Mac:** `uv tool install` from the checkout, since only one user runs it there.
 - **Into a VM:** over SSH, the one channel both drivers have. `render` and `image build`
   run `uv build`; the command that created the VM waits for SSH with the rig key, pushes
@@ -286,43 +287,44 @@ The first payoff on both machines: real files instead of base64 blobs, the `gw` 
 as subcommands of the one command, and one installer that runs on the Linux laptop and
 inside `desk`.
 
-- [ ] Move the configuration `write_files` entries of `rehearsal/utm/desk/user-data.tmpl`
+- [x] Move the configuration `write_files` entries of `rehearsal/utm/desk/user-data.tmpl`
       to `files/host/` under the naming rule above, each with its header line, and write
       `files/manifest.yaml` with `dest`, `owner`, `group`, `mode`, `template` and a
       `description` per file (the descriptions in the layout above are the starting
       point). The three `gw` scripts are not moved; they are rewritten as the next item.
-- [ ] `tests/test_files_manifest.py`: the manifest, the tree and the headers agree, as
+- [x] `tests/test_files_manifest.py`: the manifest, the tree and the headers agree, as
       described under "Files and templates"; runs in CI with the rest of pytest.
-- [ ] `host_client.py`: `client start` (what `gw-run` does: the empty ACL entries on
+- [x] `host_client.py`: `client start` (what `gw-run` does: the empty ACL entries on
       every other runtime-dir entry, the Wayland socket ACL, then `sudo env HOME= USER=`
       to `gw` and `client session`), `client session` (as `gw`: the private Xwayland `:9`
       with an xauth cookie, no `-terminate`, then exec the Gateway launcher), and
       `client exec -- CMD` (as `gw` with `DISPLAY` and `XAUTHORITY` set). Keep the dated
       gotchas (`sudo --login` double parsing, launcher-attached profiles) as comments.
-- [ ] `host_install.py`: idempotent steps, each reporting changed/unchanged: create `gw`
+- [x] `host_install.py`: idempotent steps, each reporting changed/unchanged: create `gw`
       (no sudo, linger on), copy files from the manifest, `apparmor_parser --replace`,
       `sysctl --system`, nftables (installed, not enabled until policy says so), unpack
       the Gateway tarball for the pinned version and add the toolkit line to its
       vmoptions, write `gw`'s key pair and `ssh_config` from the secrets dir.
-- [ ] `sandboxed-devenv host install --dry-run` prints the plan; `--check` exits non-zero
+- [x] `sandboxed-devenv host install --dry-run` prints the plan; `--check` exits non-zero
       if anything would change (for the headless harness and for drift checks on the
       laptop).
-- [ ] The canary's client role gains a probe that `sandboxed-devenv` resolves for `gw`
+- [x] The canary's client role gains a probe that `sandboxed-devenv` resolves for `gw`
       and that its venv under `/opt/pipx` is readable, since the sandbox now depends on
       it.
-- [ ] Delete `rehearsal/utm/extract-files.py` and the `extract` task; `lint-apparmor`
+- [x] Delete `rehearsal/utm/extract-files.py` and the `extract` task; `lint-apparmor`
       and `lint-nft` read `files/` directly, with templates rendered by
       `sandboxed-devenv render`. `lint-shell` keeps linting the remaining rig scripts
       until M2 deletes them.
-- [ ] `files/host/cloudinit__user-data.yaml.tmpl`, the desk cloud-init, shrinks to:
+- [x] `files/host/cloudinit__user-data.yaml.tmpl`, the desk cloud-init, shrinks to:
       packages (plus `pipx`), the `jsw` user and the rig key. The rig script (the UTM
       driver after M2) waits for SSH, pushes the wheel, runs `sudo pipx install --global`
       and `sudo sandboxed-devenv host install`, the same two commands as the Linux
       laptop's install day. This is where pipx 1.8.0's `--global` gets confirmed on
       Ubuntu 26.04.
-- [ ] Rebuild `desk` from the new template; `sandboxed-devenv host check` passes with 0
+- [x] Rebuild `desk` from the new template; `sandboxed-devenv host check` passes with 0
       FAIL; Gateway starts via `sandboxed-devenv client start`; Markdown preview and
-      clipboard still work.
+      clipboard still work. Done 7 November: 16 PASS, 0 FAIL; Gateway connected to the
+      rehearsal backend and opened a project; preview and clipboard confirmed by hand.
 - [x] The host pieces exist and are proven on `desk` as scripts: `gw-run`, `gw-session`,
       `gw-exec`, the AppArmor profiles, the runtime-dir ACLs, the private Xwayland with
       a cookie.
@@ -505,6 +507,9 @@ Written before the laptop arrives, first run on it.
 
 ### M6: later
 
+- [ ] Mermaid inside the Markdown preview: the preview itself renders on the rebuilt desk
+      (7 November), but a Mermaid block in it was not tried; check it once the
+      implementation milestones are done, since it takes the same JCEF path.
 - [ ] Adjustable backend disk size after creation: grow the raw disk or the Incus volume,
       then the filesystem inside, through `resources --disk-gib`.
 - [ ] Snapshots before disposal (`sandboxed-devenv snapshot PROJECT`), so uncommitted work

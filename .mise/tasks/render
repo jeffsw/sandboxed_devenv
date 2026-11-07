@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-#MISE description="render the cloud-init seed directories (no ISOs); what every other check reads"
+#MISE description="sandboxed-devenv render (files/ and the wheel under build/) plus the cloud-init seed directories, no ISOs; what every other check reads"
+#MISE depends=["sync"]
 set -euo pipefail
 cd "$MISE_PROJECT_ROOT"
 rehearsal/utm/make-seed.sh --render-only

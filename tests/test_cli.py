@@ -115,9 +115,9 @@ def test_group_without_subcommand_is_a_usage_error():
 
 
 def test_stub_exits_1_and_names_its_milestone(capsys):
-    status = cli.main(["host", "install"])
+    status = cli.main(["connect", "ls"])
     assert status == 1
-    assert "M1" in capsys.readouterr().err
+    assert "M2" in capsys.readouterr().err
 
 
 def test_doctor_runs(capsys):

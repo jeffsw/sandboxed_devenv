@@ -1,0 +1,44 @@
+#cloud-config
+# sandboxed-devenv host: cloud-init user-data for the desk VM on the Mac rig (summary, 4.9)
+# First boot installs the desktop and the packages `host install` expects, and creates the
+# host user with the rig key. Everything else (the gw user, the files, AppArmor, nftables,
+# the Gateway launcher) is `sudo sandboxed-devenv host install`, which
+# rehearsal/utm/provision-desk.sh runs over SSH once cloud-init is done: the same two
+# commands as the Linux laptop's install day, after `sudo pipx install --global` of the wheel.
+
+hostname: desk
+manage_etc_hosts: true
+package_update: true
+packages:
+  - ubuntu-desktop-minimal
+  # Clipboard sharing with the Mac over UTM's SPICE agent port (create-vms.sh turns it on).
+  - spice-vdagent
+  # `sudo pipx install --global WHEEL` puts the package under /opt/pipx and the command in
+  # /usr/local/bin, inside sudo's secure_path, readable by every user.
+  - pipx
+  # What `host install` needs; installed here so the first boot is one apt run.
+  - acl
+  - nftables
+  - wl-clipboard
+  - xwayland-run
+  - xauth
+
+users:
+  # Plays "you" on the host: logs in to GNOME, runs `sandboxed-devenv client start`. Has sudo.
+  - name: jsw
+    gecos: Host user
+    groups: [adm, sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: false
+    plain_text_passwd: "@@DESK_PASSWORD@@"
+    # The rig key, kept on the Mac in ~/.sandboxed_devenv/secrets/, so the Mac can SSH in.
+    ssh_authorized_keys:
+      - @@RIG_PUBKEY@@
+
+runcmd:
+  # Boot into GDM from now on. No reboot here: provision-desk.sh reboots once `host install`
+  # is done, so there is no race between the reboot and its SSH session.
+  - systemctl set-default graphical.target
+
+final_message: "desk: cloud-init finished after $UPTIME seconds; provision-desk.sh does the rest"

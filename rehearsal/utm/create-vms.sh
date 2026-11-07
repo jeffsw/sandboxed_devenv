@@ -1,7 +1,8 @@
 #!/bin/sh
-# Registers the two rehearsal VMs in UTM from build/<vm>.raw and build/<vm>-seed.iso
+# Registers the rehearsal VMs in UTM from build/<vm>.raw and build/<vm>-seed.iso
 # through UTM's AppleScript interface (ide_sandboxing_summary.md, 4.9).
-#   ./create-vms.sh
+#   ./create-vms.sh                both VMs
+#   ./create-vms.sh desk           one of them, after `utmctl delete` of the old one
 # Each VM: Apple Virtualization backend, 4 cores, 8 GB, UTM's defaults of one
 # shared network and one serial console, plus a display for desk. Both the raw
 # disk and the seed ISO are attached as non-removable drives, which UTM imports
@@ -14,8 +15,11 @@ set -eu
 cd "$(dirname "$0")"
 here="$(pwd)"
 
-for f in build/desk.raw build/backend.raw build/desk-seed.iso build/backend-seed.iso; do
-  [ -f "$f" ] || { echo "missing $f: run make-seed.sh and the qemu-img steps first" >&2; exit 1; }
+vms="${*:-desk backend}"
+for vm in $vms; do
+  for f in "build/$vm.raw" "build/$vm-seed.iso"; do
+    [ -f "$f" ] || { echo "missing $f: run make-seed.sh and the qemu-img steps first" >&2; exit 1; }
+  done
 done
 
 # create <name> <memory MiB> <display yes|no>
@@ -70,9 +74,12 @@ reread_bundles() {
   open -a UTM; sleep 4
 }
 
-create desk 8192 yes
-create backend 8192 no
-enable_input desk
-reread_bundles desk
+for vm in $vms; do
+  case "$vm" in
+    desk) create desk 8192 yes; enable_input desk; reread_bundles desk ;;
+    backend) create backend 8192 no ;;
+    *) echo "unknown VM $vm (desk or backend)" >&2; exit 1 ;;
+  esac
+done
 echo "registered; UTM now lists:"
 utmctl list

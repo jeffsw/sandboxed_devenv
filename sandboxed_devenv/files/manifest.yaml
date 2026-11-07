@@ -1,0 +1,61 @@
+# sandboxed-devenv: what each file under files/<role>/ cannot say about itself
+# (PLAN.md, "Files and templates"). The file name already says where it goes: the
+# destination with its leading slash dropped and the other slashes as `__`, then the
+# format's extension when the destination has none of its own, then `.tmpl` when
+# `@@NAME@@` placeholders are filled at render time. A variable path segment stays
+# `@@NAME@@` in the name, as in the destination. tests/test_files_manifest.py checks that
+# this file, the tree, the names and each file's header line agree.
+#
+# Per entry: dest (absolute path on the role's machine; ~ for a cloud-init document, which
+# has none), owner, group, mode (quoted: YAML would read 0644 as octal), template, stage
+# (backend only: image or project), description.
+host:
+  cloudinit__user-data.yaml.tmpl:
+    dest: ~
+    template: true
+    description: >-
+      The desk VM on the Mac rig: the desktop packages, the host user with the rig key.
+      Everything else is `host install`, run over SSH once cloud-init is done.
+  etc__apparmor.d__jetbrains-client.apparmor:
+    dest: /etc/apparmor.d/jetbrains-client
+    owner: root
+    group: root
+    mode: "0644"
+    template: false
+    description: >-
+      Unconfined profiles for the Gateway launcher and the JetBrains Client, granting the
+      user namespace the client's embedded Chromium needs under Ubuntu's restriction.
+  etc__nftables.conf.tmpl:
+    dest: /etc/nftables.conf
+    owner: root
+    group: root
+    mode: "0644"
+    template: true
+    description: >-
+      Egress allowlist for the backend VMs, forwarded and masqueraded by the client host.
+      Installed with the service disabled; policy decides when it is enabled.
+  etc__sysctl.d__99-vmrouter.conf:
+    dest: /etc/sysctl.d/99-vmrouter.conf
+    owner: root
+    group: root
+    mode: "0644"
+    template: false
+    description: IP forwarding on, so the client host routes for the backend VMs.
+  home__gw__.ssh__config.ssh_config.tmpl:
+    dest: /home/gw/.ssh/config
+    owner: gw
+    group: gw
+    mode: "0600"
+    template: true
+    description: >-
+      The client sandbox's SSH client config: the backend with gw's key, no agent
+      forwarding anywhere. `connect add` manages one stanza per project from M2.
+  home__gw__.config__JetBrains__JetBrainsGateway@@GATEWAY_BRANCH@@__options__sshConfigs.xml.tmpl:
+    dest: /home/gw/.config/JetBrains/JetBrainsGateway@@GATEWAY_BRANCH@@/options/sshConfigs.xml
+    owner: gw
+    group: gw
+    mode: "0600"
+    template: true
+    description: >-
+      Gateway's SSH connection to the backend, as Gateway 2026.2 wrote it after the first
+      connection was made in its window, so a fresh client host starts with it present.

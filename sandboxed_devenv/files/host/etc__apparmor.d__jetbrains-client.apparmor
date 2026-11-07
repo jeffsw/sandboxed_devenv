@@ -1,0 +1,29 @@
+# sandboxed-devenv host: copied to /etc/apparmor.d/jetbrains-client
+# Ubuntu restricts unprivileged user namespaces to confined programs, and the client's
+# embedded Chromium (JCEF) needs one for its own sandbox. The client decides whether it may
+# have one by running unshare from its own process, so the profiles attach to the launcher
+# binaries: children (that test, the Chromium helper) inherit them. Same shape as Ubuntu's
+# /etc/apparmor.d/chrome; the globs cover every client version Gateway downloads for gw.
+# `host install` loads them with apparmor_parser; apparmor.service reloads them at boot.
+# No exec rule is needed: the profiles are unconfined apart from granting userns, and
+# AppArmor 4 (Ubuntu 24.04, where CI runs the parser) lacks the @{exec_path} variable that
+# Ubuntu 26.04's own profiles use.
+abi <abi/5.0>,
+include <tunables/global>
+
+profile jetbrains-client /home/gw/.cache/JetBrains/JetBrainsClientDist/**/bin/jetbrains_client flags=(unconfined) {
+  userns,
+  include if exists <local/jetbrains-client>
+}
+
+# In JCEF's remote mode every Chromium process runs from cef_server and inherits the
+# launcher's profile above; this one covers a build that execs the helper.
+profile jetbrains-client-jcef /home/gw/.cache/JetBrains/JetBrainsClientDist/**/jcef_helper flags=(unconfined) {
+  userns,
+  include if exists <local/jetbrains-client-jcef>
+}
+
+profile jetbrains-gateway /home/gw/gateway/jbr/bin/java flags=(unconfined) {
+  userns,
+  include if exists <local/jetbrains-gateway>
+}
