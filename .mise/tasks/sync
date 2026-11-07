@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="uv sync --locked: the project venv with the package (editable) and the dev group, exactly as uv.lock says"
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+uv sync --locked
