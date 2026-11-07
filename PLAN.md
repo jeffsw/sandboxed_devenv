@@ -55,17 +55,17 @@ machine it runs on can play, and a subcommand run in the wrong place says so and
 ## Projects and repositories
 
 A **project** is the unit of work: a directory `~/proj/<project>` holding one or more
-repositories, the layout used on the Mac. A **backend** is the VM that serves one
-project, and there is exactly one per project, so every command that needs a backend
-takes the project's name as `PROJECT` and finds the backend through the inventory; no
-command takes a backend name. The VM itself is named after the project with a prefix,
-`vm_name_prefix` in the user config, default `idesbx-`, so `utmctl list` and
-`incus list` show `idesbx-ide_sandbox` apart from other VMs on a shared hypervisor.
-Inside the VM the repositories are checked out at `~/proj/PROJECT/<repo>`, the same
-layout as outside, and the Gateway connection opens `~/proj/PROJECT`, where the IntelliJ
-project spans them. Repositories come and go over the life of the backend: `new` takes
-none or several, `repo add` and `repo rm` change the set later. A disposable backend is
-a project too, a short-lived one with a name to match.
+repositories, the layout used on the Mac. A **backend** is the VM that serves one project,
+and there is exactly one per project, so every command that needs a backend takes the
+project's name as `PROJECT` and finds the backend through the inventory; no command takes
+a backend name. The VM itself is named after the project with a prefix, `vm_name_prefix`
+in `~/.sandboxed_devenv/config.yaml`, default `idesbx-`, so `utmctl list` and `incus list`
+show `idesbx-ide_sandbox` apart from other VMs on a shared hypervisor. Inside the VM the
+repositories are checked out at `~/proj/PROJECT/<repo>`, the same layout as outside, and
+the Gateway connection opens `~/proj/PROJECT`, where the IntelliJ project spans them.
+Repositories come and go over the life of the backend: `new` takes none or several,
+`repo add` and `repo rm` change the set later. A disposable backend is a project too, a
+short-lived one with a name to match.
 
 Each repository gets its own deploy key pair inside the VM, because GitHub refuses a
 deploy key that is already registered on another repository. The pair lives at
@@ -184,7 +184,7 @@ it is and whether it is rendered:
 | Command | Role | Does |
 |---|---|---|
 | `sandboxed-devenv --version` | any | The package version; it must agree on every machine or `test end-to-end` fails |
-| `sandboxed-devenv doctor` | any | Which roles this machine can play, driver and tool versions, config and secrets dirs, the version on each client host and backend it can reach |
+| `sandboxed-devenv doctor` | any | Which roles this machine can play, driver and tool versions, what `~/.sandboxed_devenv/` holds, the version on each client host and backend it can reach |
 | `sandboxed-devenv render [--out DIR]` | any | Renders every artifact (cloud-inits, nftables, AppArmor, ssh configs) and builds the wheel, without touching a VM. CI's entry point |
 | `sandboxed-devenv canary --role ROLE [--json]` | any | The probes for the client or backend role, run locally |
 | `sandboxed-devenv image build [--force]` | control | Downloads the Ubuntu cloud image, boots it with the base cloud-init (which installs the package), waits, runs `cloud-init clean`, powers off, registers the base image |
@@ -374,12 +374,13 @@ Parity with today's rig, then the old scripts go.
 
 ### M3: credentials
 
-- [ ] `control_inventory.py`: one JSON file per project under the state dir with the
-      project name, the backend's VM name, driver, image version, package version,
-      created, a `repos` list (owner/repo, checkout path, access, the key's fingerprint
-      and GitHub id, created) and a `credentials` list for everything else; each entry has
-      kind, scope, fingerprint or id, where it lives, created, the revoke action and its
-      state, `active` or `pending-revoke`.
+- [ ] `control_inventory.py`: one JSON file per project in
+      `~/.sandboxed_devenv/inventory/` with the project name, the backend's VM name,
+      driver, image version, package version, created, a `repos` list (owner/repo,
+      checkout path, access, the key's fingerprint and GitHub id, created) and a
+      `credentials` list for everything else; each entry has kind, scope, fingerprint or
+      id, where it lives, created, the revoke action and its state, `active` or
+      `pending-revoke`.
 - [ ] `control_creds.py`: deploy keys, one per repository (`backend repo add` over SSH
       returns the public key, `gh repo deploy-key add` with `--allow-write` when asked,
       record the key id; `repo rm` runs `gh repo deploy-key delete` before `backend repo
@@ -399,9 +400,10 @@ Parity with today's rig, then the old scripts go.
       (Incus can read it from the guest; UTM's serial console carries cloud-init's host
       key print) before the first SSH connection, then hands it to `connect add`; never
       trust on first use.
-- [ ] Secrets dir: `~/.config/sandboxed-devenv/secrets/` (mode 0700) holding the rig key
-      pair and `claude_oauth_token`; optional `op://` references resolved with the
-      1Password CLI at render time. `sandboxed-devenv doctor` reports which is in use.
+- [ ] Secrets dir: `~/.sandboxed_devenv/secrets/` (mode 0700) holding the rig key pair
+      and `claude_oauth_token`, one file per secret and none of them in `config.yaml`;
+      optional `op://` references there are resolved with the 1Password CLI at render
+      time. `sandboxed-devenv doctor` reports which is in use.
 - [ ] Policy knob in the user config: one Claude token for all VMs or one per trust
       level; default one token, as the open question in the summary suggests.
 - [x] The deploy key per VM, `IdentityAgent none`, the Claude token in `settings.json`,
@@ -503,9 +505,11 @@ daily machine, which is the reason the UTM driver is kept rather than retired.
       carried in each VM's cloud-init. Rejected: `uv tool install` from the private
       repository on the Linux laptop (per user, so invisible to `gw`), and a bare
       `pip install` of the wheel (refused by Ubuntu's externally managed Python).
-- [ ] **State dir.** `~/.local/state/sandboxed-devenv/` for the inventory and
-      `~/.config/sandboxed-devenv/` for config and secrets, or everything under one
-      directory. Default proposed: the two XDG locations.
+- [x] **State dir.** Decided 7 November: one directory, `~/.sandboxed_devenv/`, holding
+      `config.yaml`, `inventory/` (one JSON file per project) and `secrets/` (mode 0700,
+      one file per secret). Secrets never appear in `config.yaml`, only optional `op://`
+      references, so configuration and secrets can be managed separately. Rejected: the
+      two XDG locations, which spread one tool's state over two trees.
 - [ ] **Base image on UTM.** A raw disk copied per backend (simple, what the rig does
       today) versus `utmctl clone` of a stopped base VM (faster, but UTM copies the whole
       bundle). Proposed: raw disk copy, since UTM's clone is not the Linux laptop's path.
