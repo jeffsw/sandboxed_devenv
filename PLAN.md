@@ -33,7 +33,7 @@ copied around and no remote configuration is edited by hand.
 
 | Role | On the Mac rig | On the Framework | Subcommands |
 |---|---|---|---|
-| control | the Mac | the laptop | `image`, `new`, `ls`, `start`, `stop`, `rm`, `clone`, `repo`, `ssh`, `console`, `creds`, `test` |
+| control | the Mac | the laptop | `image`, `new`, `ls`, `start`, `stop`, `rm`, `clone`, `repo`, `ssh`, `serial-console`, `creds`, `test` |
 | client host | the `desk` VM | the laptop | `host`, `client`, `connect` |
 | backend | each backend VM under UTM | each backend VM under Incus | `backend` |
 | any | every machine above | every machine above | `doctor`, `render`, `canary`, `--version` |
@@ -107,7 +107,7 @@ sandboxed_devenv/
   control_driver_utm.py          utmctl, osascript, plutil, hdiutil (from create-vms.sh, make-seed.sh)
   control_driver_incus.py        incus CLI with --format json
   control_images.py              image build / ls / rm
-  control_backends.py            new, ls, start, stop, rm, clone, ssh, console: one backend per project
+  control_backends.py            new, ls, start, stop, rm, clone, ssh, serial-console: one backend per project
   control_inventory.py           backends and their credentials, one JSON file per project
   control_creds.py               mint, register, rotate, revoke (gh deploy keys, Claude token, gw key)
   control_testing.py             the headless provisioning harness
@@ -198,7 +198,8 @@ it is and whether it is rendered, and the file itself says so too.
 | `sandboxed-devenv repo add PROJECT OWNER/REPO [--deploy-key-grants-repo-write] [--no-clone]` | control | Mints a key pair for the repository in the VM (`backend repo add`), registers it with `gh repo deploy-key add`, records it in the inventory, clones to `~/proj/PROJECT/REPO` |
 | `sandboxed-devenv repo rm PROJECT OWNER/REPO [--delete-checkout]` | control | Revokes the key on GitHub, then removes it and its alias stanza in the VM; the checkout stays unless asked |
 | `sandboxed-devenv repo ls PROJECT` | control | The project's repositories with key fingerprint, access and age |
-| `sandboxed-devenv ssh PROJECT [CMD]`, `sandboxed-devenv console PROJECT` | control | Shell as `dev` in the project's backend with the rig key; serial console via the driver |
+| `sandboxed-devenv ssh PROJECT [CMD]` | control | Shell as `dev` in the project's backend with the rig key |
+| `sandboxed-devenv serial-console PROJECT` | control | The backend's serial console through the driver (`screen` on UTM's pty, `incus console`), for when SSH is not up |
 | `sandboxed-devenv creds ls [PROJECT]` | control | Every credential, scope, age, where it lives, how it is revoked |
 | `sandboxed-devenv creds rotate PROJECT [--deploy-key [OWNER/REPO]] [--claude-token]` | control | Regenerate inside the VM (`backend repo rekey` for one repository or all), re-register, update the inventory |
 | `sandboxed-devenv creds audit [--fix]` | control | Compares the inventory with `gh repo deploy-key list` on every repository it knows: retries pending revocations, reports keys GitHub holds that no project claims, and with `--fix` deletes them |
@@ -353,9 +354,10 @@ Parity with today's rig, then the old scripts go.
       `cloud-init clean --logs`, power off; UTM keeps the raw disk under `build/images/`
       named by version, Incus publishes an image alias. Rebuilding is forced by a version
       change or `--force`.
-- [ ] `sandboxed-devenv new`, `ls`, `start`, `stop`, `rm`, `clone`, `ssh`, `console`
-      working on the Mac with the UTM driver; the per-project seed rendered from
-      `cloudinit-project__user-data.yaml.tmpl`; readiness from `backend status`.
+- [ ] `sandboxed-devenv new`, `ls`, `start`, `stop`, `rm`, `clone`, `ssh`,
+      `serial-console` working on the Mac with the UTM driver; the per-project seed
+      rendered from `cloudinit-project__user-data.yaml.tmpl`; readiness from
+      `backend status`.
 - [ ] `host_connect.py`: `connect add PROJECT ADDRESS HOSTKEY` writes the Gateway
       `sshConfigs.xml` entry (only when Gateway is not running, else print instructions),
       the `Host` stanza in `gw`'s `ssh_config` and the pinned host key in `known_hosts`;
