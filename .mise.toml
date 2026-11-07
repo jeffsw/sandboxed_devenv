@@ -2,6 +2,10 @@
 # Nothing secret here; this file is committed. The rehearsal's secrets live in
 # rehearsal/utm/keys/ (gitignored): the rig key pair and, optionally, a Claude
 # Code token that make-seed.sh folds into the backend's settings.
+# The project venv, so pytest and the sandboxed-devenv command are on PATH in a shell
+# with mise activated. uv creates it (`mise run sync`); mise must not, or the two can
+# pick different interpreters and uv rebuilds the venv on every run.
+_.python.venv = { path = ".venv", create = false }
 
 [settings]
 # The pipx backend runs through uv (pinned below) instead of a pipx install.

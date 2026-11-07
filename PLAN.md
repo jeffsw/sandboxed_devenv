@@ -112,6 +112,8 @@ serve, with two data directories beside them and no subpackages.
 pyproject.toml                   metadata, entry point sandboxed-devenv = sandboxed_devenv.cli:main
 sandboxed_devenv/
   cli.py                         one argparse tree; each role module registers its subcommands
+  common.py                      the package version, subcommand groups, the not-yet-implemented stub
+  doctor.py                      doctor: roles this machine can play, drivers found, ~/.sandboxed_devenv
   config.py                      user config + versions + policy models (pydantic), YAML readers
   render.py                      template rendering and the wheel build, no side effects
   canary.py                      stdlib-only probes; the `canary` subcommand; runnable with python3 -m
@@ -253,22 +255,28 @@ shows where the rig stands.
 
 - [x] Command name: `sandboxed-devenv`, the same as the distribution name (decided 24
       October).
-- [ ] `pyproject.toml`: setuptools, `requires-python >= 3.12`, dependencies `pyyaml` and
-      `pydantic`, dev group `pytest`, `ruff`, `build`; entry point `sandboxed-devenv`;
+- [x] `pyproject.toml`: setuptools, `requires-python >= 3.12`, dependencies `pyyaml` and
+      `pydantic`, dev group `pytest` and `build` (ruff stays a mise tool, one pin); entry
+      point `sandboxed-devenv`;
       package data for `files/**`; the version in one place,
       read back by `--version` through `importlib.metadata`.
-- [ ] `sandboxed_devenv/cli.py` with `argparse` subparsers grouped by role as in the
+- [x] `sandboxed_devenv/cli.py` with `argparse` subparsers grouped by role as in the
       table above, each role module registering its own, `--dry-run` and `--verbose` as
       global flags, exit codes: 0 ok, 1 failure (including wrong role), 2 usage.
-- [ ] `uv.lock`; `.mise.toml` gains `_.python.venv = ".venv"` and a `uv sync` task like
-      rpkilog's; `lint-python` and a new `test` task run inside the venv.
-- [ ] `render` builds the wheel with `uv build` into `build/`, beside the rendered
+- [x] `uv.lock`; `.mise.toml` gains `_.python.venv` and a `sync` task (`uv sync --locked`)
+      like rpkilog's; `lint-python` covers the package and a new `test` task runs pytest
+      in the venv.
+- [x] `render` builds the wheel with `uv build` into `build/`, beside the rendered
       artifacts; the wheel is what gets pushed into every VM from M1 on.
-- [ ] `tests/conftest.py` and first tests: `sandboxed-devenv --help` lists every
-      subcommand; `--version` matches `pyproject.toml`.
-- [ ] CI: `mise run verify` also runs `pytest`; the workflow installs the package in the
-      venv. The macOS job stays manual.
-- [ ] `AGENTS.md` with the verification contract, as in rpkilog; `CLAUDE.md` includes it.
+- [x] `tests/conftest.py` and first tests: the command tree equals the CLI table above;
+      `--version` matches `pyproject.toml`; exit codes 1 and 2; `doctor` and
+      `render --dry-run` run.
+- [x] CI: `mise run verify` also runs `pytest` through the `test` task; the workflow
+      caches uv. The macOS job stays manual.
+- [x] `AGENTS.md` with the verification contract, as in rpkilog.
+- [ ] `CLAUDE.md` (`@AGENTS.md`) and `.claude/settings.json` with the mise tasks and
+      read-only git and gh commands allow-listed, as in rpkilog; written by the user,
+      since the agent's permission classifier declines to write its own instructions.
 - [x] Tools pinned in `.mise.toml`; checks defined once as mise tasks; CI runs
       `mise run verify`.
 

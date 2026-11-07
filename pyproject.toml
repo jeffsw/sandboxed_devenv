@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sandboxed-devenv"
+# The one place the version lives; `sandboxed-devenv --version` reads it from the
+# installed metadata, and `test end-to-end` fails when machines disagree on it.
+version = "0.1.0"
+description = "Sandboxed development environment: an IDE thin client in a sandbox, toolchains and agents in per-project VMs"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Jeff Wheeler", email = "jeffsw6@gmail.com" }]
+keywords = ["sandbox", "jetbrains-gateway", "incus", "utm", "cloud-init"]
+dependencies = [
+    "pydantic",
+    "pyyaml",
+]
+
+[project.scripts]
+sandboxed-devenv = "sandboxed_devenv.cli:main"
+
+[project.urls]
+source = "https://github.com/jeffsw/sandboxed_devenv"
+
+[dependency-groups]
+# ruff is a mise tool (pinned in .mise.toml), not a venv package, so one pin serves CI and humans.
+dev = [
+    "build",
+    "pytest",
+]
+
+[tool.uv]
+# Prefer the machine's own interpreter over uv-managed ones: the VMs and the Linux laptop run
+# the distribution's Python, and a uv-managed free-threaded build is not what they run.
+python-preference = "system"
+
+[tool.setuptools]
+# Flat layout with tests/ and rehearsal/ beside the package: name the package rather than discover.
+packages = ["sandboxed_devenv"]
+
+[tool.setuptools.package-data]
+# files/: everything a role receives on disk plus the cloud-init documents (PLAN.md, "Files and templates").
+sandboxed_devenv = ["files/**/*", "files/**/.*"]
+
+[tool.pytest.ini_options]
+addopts = ["--import-mode=importlib"]
+testpaths = ["tests"]

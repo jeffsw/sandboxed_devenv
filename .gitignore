@@ -5,3 +5,8 @@ node_modules/
 rehearsal/utm/build/
 rehearsal/utm/keys/
 rehearsal/utm/*.img
+.venv/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
