@@ -48,8 +48,9 @@ A **project** is the unit of work: a directory `~/proj/<project>` holding one or
 repositories, the layout used on the Mac. A **backend** is the VM that serves one
 project, and there is exactly one per project, so every command that needs a backend
 takes the project's name as `PROJECT` and finds the backend through the inventory; no
-command takes a backend name. The VM itself is named after the project, with an optional
-prefix from the user config to keep it apart from other VMs on a shared hypervisor.
+command takes a backend name. The VM itself is named after the project with a prefix,
+`vm_name_prefix` in the user config, default `idesbx-`, so `utmctl list` and
+`incus list` show `idesbx-ide_sandbox` apart from other VMs on a shared hypervisor.
 Inside the VM the repositories are checked out at `~/proj/PROJECT/<repo>`, the same
 layout as outside, and the Gateway connection opens `~/proj/PROJECT`, where the IntelliJ
 project spans them. Repositories come and go over the life of the backend: `new` takes
