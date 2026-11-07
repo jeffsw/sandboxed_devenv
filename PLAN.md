@@ -557,5 +557,6 @@ daily machine, which is the reason the UTM driver is kept rather than retired.
       that checkout, so submodules and fresh clones miss it.
 - [ ] **Incus storage.** Directory, btrfs or ZFS pool on the Linux laptop; affects the
       partitioning on install day. Proposed: btrfs on its own volume.
-- [ ] **Host distribution.** Ubuntu 26.04 is assumed throughout (AppArmor profiles,
-      Framework's certification). Changing it reopens M1.
+- [x] **Host distribution.** Decided 7 November: Ubuntu 26.04 on the Linux laptop, the
+      same release as the VMs (AppArmor profiles, pipx 1.8.0, Framework's certification).
+      Changing it would reopen M1.
