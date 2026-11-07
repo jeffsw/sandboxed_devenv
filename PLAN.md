@@ -16,9 +16,9 @@ manages three things:
 1. **The host**: the client sandbox (`gw` user, its launcher, the AppArmor profile, the
    egress rules) and the VM platform. On the Framework the host is the laptop; on the Mac
    it is the `desk` VM, which is what keeps the Mac useful as a test bed.
-2. **Backend VMs**: a base image built once from the backend cloud-init, and per-project
-   instances launched from it in seconds, each with its own credentials, plus disposable
-   clones.
+2. **Backend VMs**: a base image built once from the backend cloud-init, and one instance
+   per project launched from it in seconds, holding that project's repositories with a
+   credential per repository, plus disposable clones.
 3. **Provisioning and verification**: rendering every artifact without side effects (for
    CI), building and checking VMs headlessly (for the Mac and later the Framework), and
    the canary as the assertion library.
@@ -33,7 +33,7 @@ copied around and no remote configuration is edited by hand.
 
 | Role | On the Mac rig | On the Framework | Subcommands |
 |---|---|---|---|
-| control | the Mac | the laptop | `image`, `new`, `ls`, `start`, `stop`, `rm`, `clone`, `ssh`, `console`, `creds`, `test` |
+| control | the Mac | the laptop | `image`, `new`, `ls`, `start`, `stop`, `rm`, `clone`, `repo`, `ssh`, `console`, `creds`, `test` |
 | client host | the `desk` VM | the laptop | `host`, `client`, `connect` |
 | backend | each backend VM under UTM | each backend VM under Incus | `backend` |
 | any | every machine above | every machine above | `doctor`, `render`, `canary`, `--version` |
@@ -41,6 +41,24 @@ copied around and no remote configuration is edited by hand.
 The user config names the client host: `client_host: local` on the Framework,
 `client_host: ssh://jsw@192.168.64.10` on the Mac. `doctor` reports which roles the
 machine it runs on can play, and a subcommand run in the wrong place says so and exits 1.
+
+## Projects and repositories
+
+An instance is a project, named as its directory under `~/proj/` is on the Mac, and it
+holds that project's repositories at `~/proj/NAME/<repo>` inside the VM, the same layout
+as outside. Repositories come and go over the life of the instance: `new` takes none or
+several, `repo add` and `repo rm` change the set later, and the Gateway connection opens
+`~/proj/NAME`, where the IntelliJ project spans them.
+
+Each repository gets its own deploy key pair inside the VM, because GitHub refuses a
+deploy key that is already registered on another repository. The pair lives at
+`~/.ssh/deploy_<owner>_<repo>`, an alias stanza in `dev`'s `ssh_config`
+(`Host github.com-<owner>-<repo>`, `IdentitiesOnly yes`) binds it to that repository,
+and the checkout's remote uses the alias. Adding a repository mints and registers a key;
+removing one revokes it on GitHub first, then deletes it in the VM, and leaves the
+checkout unless asked otherwise. The inventory records every key with its GitHub id, so
+`rm` of the instance revokes them all, and a revocation that fails is kept as
+`pending-revoke` until `creds audit` gets it through.
 
 ## Principles
 
@@ -89,7 +107,7 @@ sandboxed_devenv/
   host_install.py                host install / check: users, files, AppArmor, nftables, Gateway, linger
   host_client.py                 client start / session / exec (what gw-run, gw-session, gw-exec do)
   host_connect.py                connect add / rm / ls: Gateway sshConfigs.xml, gw's ssh_config, known_hosts
-  backend_prepare.py             backend prepare / status / deploy-key
+  backend_prepare.py             backend prepare / status / repo
   files/                         everything a role receives on disk, plus cloud-init; package data
     manifest.yaml                dest, owner, group, mode, template, stage, description per file
     host/
@@ -166,13 +184,17 @@ it is and whether it is rendered, and the file itself says so too.
 | `sandboxed-devenv canary --role ROLE [--json]` | any | The probes for the client or backend role, run locally |
 | `sandboxed-devenv image build [--force]` | control | Downloads the Ubuntu cloud image, boots it with the base cloud-init (which installs the package), waits, runs `cloud-init clean`, powers off, registers the base image |
 | `sandboxed-devenv image ls / rm` | control | Base images and their versions |
-| `sandboxed-devenv new NAME --repo OWNER/REPO [--disposable] [--write]` | control | Launches an instance from the base image with its own cloud-init, waits for `backend status` to report ready, registers the deploy key the instance minted, pins the host key, runs `connect add` on the client host, records everything in the inventory. `--disposable` marks a VM for stranger code, used once and destroyed (summary 4.7): `--repo` becomes optional and no deploy key is registered without it, `ls` flags it, and `rm` takes no snapshot. `--write` registers the deploy key with write access (`gh repo deploy-key add --allow-write`) so the VM can push; the default key is read-only |
-| `sandboxed-devenv ls` | control | Instances, state, address, repository, package version, credential ages |
+| `sandboxed-devenv new NAME [--repo OWNER/REPO]... [--disposable] [--deploy-key-grants-repo-write]` | control | Launches an instance from the base image with its own cloud-init, waits for `backend status` to report ready, runs `repo add` for each `--repo`, pins the host key, runs `connect add` on the client host, records everything in the inventory. `--repo` is optional and repeatable; repositories can be added later. `--disposable` marks a VM for stranger code, used once and destroyed (summary 4.7): `ls` flags it and `rm` takes no snapshot. `--deploy-key-grants-repo-write` applies to every `--repo` given and registers its key with write access (`gh repo deploy-key add --allow-write`) so the VM can push; the default key is read-only |
+| `sandboxed-devenv ls` | control | Instances, state, address, repositories, package version, credential ages |
 | `sandboxed-devenv start / stop / rm NAME` | control | Lifecycle; `rm` revokes every credential the inventory lists and runs `connect rm`, then deletes the VM |
-| `sandboxed-devenv clone NAME NEW` | control | Disposable copy; the clone gets fresh instance credentials through `backend deploy-key new` |
+| `sandboxed-devenv clone NAME NEW` | control | Disposable copy; every repository in the clone gets a fresh key pair through `backend repo rekey`, registered under the clone's name |
+| `sandboxed-devenv repo add NAME OWNER/REPO [--deploy-key-grants-repo-write] [--no-clone]` | control | Mints a key pair for the repository in the VM (`backend repo add`), registers it with `gh repo deploy-key add`, records it in the inventory, clones to `~/proj/NAME/REPO` |
+| `sandboxed-devenv repo rm NAME OWNER/REPO [--delete-checkout]` | control | Revokes the key on GitHub, then removes it and its alias stanza in the VM; the checkout stays unless asked |
+| `sandboxed-devenv repo ls NAME` | control | The instance's repositories with key fingerprint, access and age |
 | `sandboxed-devenv ssh NAME [CMD]`, `sandboxed-devenv console NAME` | control | Shell as `dev` with the rig key; serial console via the driver |
 | `sandboxed-devenv creds ls [NAME]` | control | Every credential, scope, age, where it lives, how it is revoked |
-| `sandboxed-devenv creds rotate NAME [--deploy-key] [--claude-token]` | control | Regenerate inside the VM through `backend deploy-key new`, re-register, update the inventory |
+| `sandboxed-devenv creds rotate NAME [--deploy-key [OWNER/REPO]] [--claude-token]` | control | Regenerate inside the VM (`backend repo rekey` for one repository or all), re-register, update the inventory |
+| `sandboxed-devenv creds audit [--fix]` | control | Compares the inventory with `gh repo deploy-key list` on every repository it knows: retries pending revocations, reports keys GitHub holds that no instance claims, and with `--fix` deletes them |
 | `sandboxed-devenv test provision` | control | The headless harness: image, instance, canary in both roles, SSH path, version match, teardown |
 | `sandboxed-devenv host install [--dry-run] [--check]` | client host | Provisions the host: `gw` user and linger, files from the manifest, AppArmor, sysctl, nftables, Gateway tarball. Linux only, needs root |
 | `sandboxed-devenv host check` | client host | Runs the canary in the client role as `gw` (through `client exec`) and prints the summary |
@@ -180,9 +202,9 @@ it is and whether it is rendered, and the file itself says so too.
 | `sandboxed-devenv client session` | client host | As `gw`: the private Xwayland with its cookie, then the Gateway launcher |
 | `sandboxed-devenv client exec -- CMD` | client host | What `gw-exec` does: run a command as `gw` with its display and cookie |
 | `sandboxed-devenv connect add / rm / ls` | client host | Gateway's `sshConfigs.xml` entry, the `Host` stanza in `gw`'s `ssh_config`, the pinned key in `known_hosts` |
-| `sandboxed-devenv backend prepare` | backend | First boot of an instance: deploy key, GitHub host keys, git identity, Claude settings, `IdentityAgent none`, optional clone; reads `/etc/sandboxed-devenv/instance.yaml` |
-| `sandboxed-devenv backend status [--json]` | backend | cloud-init done, IDE backend registered, package version, deploy key fingerprint, SSH host public keys |
-| `sandboxed-devenv backend deploy-key show / new` | backend | The public deploy key, or a fresh pair replacing it |
+| `sandboxed-devenv backend prepare` | backend | First boot of an instance: GitHub host keys, git identity, Claude settings, `IdentityAgent none`, then `backend repo add` for each repository listed in `/etc/sandboxed-devenv/instance.yaml` |
+| `sandboxed-devenv backend status [--json]` | backend | cloud-init done, IDE backend registered, package version, repositories with their key fingerprints, SSH host public keys |
+| `sandboxed-devenv backend repo add / rm / rekey / ls` | backend | The VM side of `repo`: mint or delete a repository's key pair and alias stanza, clone or keep the checkout, print the public key as JSON |
 
 ## Installation
 
@@ -306,17 +328,18 @@ Parity with today's rig, then the old scripts go.
       tools, `mise` and `direnv` hooks, the wheel and its `pipx install --global`, then
       `sandboxed-devenv backend prepare --stage image`) and
       `files/backend/cloudinit-instance__user-data.yaml.tmpl` (hostname, `dev`'s
-      authorized key, `/etc/sandboxed-devenv/instance.yaml` with the repository, git
+      authorized key, `/etc/sandboxed-devenv/instance.yaml` with the repositories, git
       identity and the Claude token, then `runcmd: sandboxed-devenv backend prepare`). The
       backend's own files (the sshd hardening, `dev`'s `ssh_config`, Claude's
       `settings.json`) move to `files/backend/` with a `stage` in the manifest, and both
       stages deploy them with the same routine `host install` uses.
 - [ ] `backend_prepare.py`: `backend prepare` does what the instance cloud-init's
-      `runcmd` does today (deploy key generation, GitHub host keys from
-      `api.github.com/meta`, git identity, Claude `settings.json`, `IdentityAgent none`,
-      optional project clone) and is idempotent; `backend status --json` reports
-      cloud-init state, the IDE backend registration, the package version, the deploy key
-      fingerprint and the SSH host public keys; `backend deploy-key show / new`.
+      `runcmd` does today (GitHub host keys from `api.github.com/meta`, git identity,
+      Claude `settings.json`, `IdentityAgent none`, then `backend repo add` for each
+      listed repository) and is idempotent; `backend status --json` reports cloud-init
+      state, the IDE backend registration, the package version, the repositories with
+      their key fingerprints and the SSH host public keys; `backend repo add / rm / rekey
+      / ls` as described under "Projects and repositories".
 - [ ] `sandboxed-devenv image build`: boot the cloud image with the base cloud-init, wait,
       `cloud-init clean --logs`, power off; UTM keeps the raw disk under `build/images/`
       named by version, Incus publishes an image alias. Rebuilding is forced by a version
@@ -343,18 +366,26 @@ Parity with today's rig, then the old scripts go.
 ### M3: credentials
 
 - [ ] `control_inventory.py`: one JSON file per instance under the state dir with name,
-      driver, repository, image version, package version, created, and a `credentials`
-      list; each entry has kind, scope, fingerprint or id, where it lives, created, and
-      the revoke action.
-- [ ] `control_creds.py`: deploy key (`backend deploy-key show` over SSH, `gh repo
-      deploy-key add`, record the key id; `revoke` runs `gh repo deploy-key delete`;
-      `rotate` runs `backend deploy-key new` and re-registers), Claude token (from the
+      driver, image version, package version, created, a `repos` list (owner/repo,
+      checkout path, access, the key's fingerprint and GitHub id, created) and a
+      `credentials` list for everything else; each entry has kind, scope, fingerprint or
+      id, where it lives, created, the revoke action and its state, `active` or
+      `pending-revoke`.
+- [ ] `control_creds.py`: deploy keys, one per repository (`backend repo add` over SSH
+      returns the public key, `gh repo deploy-key add` with `--allow-write` when asked,
+      record the key id; `repo rm` runs `gh repo deploy-key delete` before `backend repo
+      rm`; `rotate` runs `backend repo rekey` and re-registers; a failed GitHub call
+      leaves the entry `pending-revoke`), Claude token (from the
       secrets dir, hashed fingerprint only in the inventory; no revoke API, so `creds ls`
       shows age and the runbook says how to rotate at the account), `gw`'s key pair
       (minted once per host, recorded with its fingerprint), git identity.
 - [ ] `sandboxed-devenv rm` revokes everything listed and runs `connect rm` before
-      deleting the VM; `sandboxed-devenv clone` runs `backend deploy-key new` in the
-      clone and registers it, rather than copying the parent's.
+      deleting the VM; `sandboxed-devenv clone` runs `backend repo rekey` for every
+      repository in the clone and registers the new keys under the clone's name, rather
+      than copying the parent's.
+- [ ] `repo add`, `repo rm` and `repo ls` on the control side, and `creds audit`, which
+      compares the inventory with `gh repo deploy-key list` on every repository it
+      knows: pending revocations retried, unclaimed keys reported, `--fix` deletes them.
 - [ ] Host key pinning: `new` takes the VM's SSH host public key through the driver
       (Incus can read it from the guest; UTM's serial console carries cloud-init's host
       key print) before the first SSH connection, then hands it to `connect add`; never
@@ -469,6 +500,12 @@ machine, which is the reason the UTM driver is kept rather than retired.
 - [ ] **Wheel delivery to Incus VMs.** The cloud-init entry (uniform with UTM) versus
       `incus file push` after launch (no size concern, one more driver step). Proposed:
       the cloud-init entry, with the push as the fallback if Incus objects to the size.
+- [ ] **Binding a key to its repository inside the VM.** An alias stanza per repository
+      in `dev`'s `ssh_config` (works for any git command from any directory, needs the
+      alias in the remote URL) versus `core.sshCommand` set per checkout (plain URLs, but
+      only inside that checkout; submodules and fresh clones miss it). Proposed: the
+      alias stanza, written by `backend repo add`, with the checkout's remote pointing
+      at it.
 - [ ] **Incus storage.** Directory, btrfs or ZFS pool on the Framework; affects the
       partitioning on install day. Proposed: btrfs on its own volume.
 - [ ] **Host distribution.** Ubuntu 26.04 is assumed throughout (AppArmor profiles,
