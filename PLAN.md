@@ -321,9 +321,10 @@ inside `desk`.
       and `sudo sandboxed-devenv host install`, the same two commands as the Linux
       laptop's install day. This is where pipx 1.8.0's `--global` gets confirmed on
       Ubuntu 26.04.
-- [ ] Rebuild `desk` from the new template; `sandboxed-devenv host check` passes with 0
+- [x] Rebuild `desk` from the new template; `sandboxed-devenv host check` passes with 0
       FAIL; Gateway starts via `sandboxed-devenv client start`; Markdown preview and
-      clipboard still work.
+      clipboard still work. Done 7 November: 16 PASS, 0 FAIL; Gateway connected to the
+      rehearsal backend and opened a project; preview and clipboard confirmed by hand.
 - [x] The host pieces exist and are proven on `desk` as scripts: `gw-run`, `gw-session`,
       `gw-exec`, the AppArmor profiles, the runtime-dir ACLs, the private Xwayland with
       a cookie.
@@ -506,6 +507,9 @@ Written before the laptop arrives, first run on it.
 
 ### M6: later
 
+- [ ] Mermaid inside the Markdown preview: the preview itself renders on the rebuilt desk
+      (7 November), but a Mermaid block in it was not tried; check it once the
+      implementation milestones are done, since it takes the same JCEF path.
 - [ ] Adjustable backend disk size after creation: grow the raw disk or the Incus volume,
       then the filesystem inside, through `resources --disk-gib`.
 - [ ] Snapshots before disposal (`sandboxed-devenv snapshot PROJECT`), so uncommitted work
