@@ -158,38 +158,26 @@ its 4.9 commands get replaced by `sandboxed-devenv` equivalents at M2.
 ### Files and templates
 
 Everything a role receives on disk, and every cloud-init document, lives under
-`files/<role>/` under one naming rule, so a listing says where a file goes, what format
-it is and whether it is rendered, and the file itself says so too.
+`files/<role>/`, named so that the listing above answers where a file goes, what format
+it is and whether it is rendered:
 
-- **The directory is the role.** The filename is the destination with the leading slash
-  dropped and every other slash replaced by `__`. Dots stay, since none is leading once
-  joined: `home__gw__.ssh__config`. Cloud-init documents have no destination, so they
-  take the prefix `cloudinit__` and the NoCloud file name, which Incus also uses for its
-  config keys; the backend role has `cloudinit-image__` for the base image and
-  `cloudinit-project__` for a project's backend.
-- **The format is the extension.** The destination's own when it has one, otherwise an
-  added one from a fixed set: `.apparmor`, `.ssh_config`, `.yaml` for cloud-init. `.tmpl`
-  comes last and marks a template; everything else is copied byte for byte.
-- **A variable part of a destination is written as `@@NAME@@`,** upper case, at the
-  position it occupies in the path, exactly as placeholders are written inside
-  templates. The filename then decodes to the manifest's `dest` character for
-  character, and the value comes from `versions.yaml` or the project config at deploy
-  time. Gateway's directory carries its branch, so its file is
-  `home__gw__.config__JetBrains__JetBrainsGateway@@GATEWAY_BRANCH@@__options__sshConfigs.xml.tmpl`.
-  A variable in the path says nothing about the content; `.tmpl` is still decided by
-  whether the content is rendered.
-- **`manifest.yaml` is the authority** for what a file cannot say about itself: `dest`
-  (placeholders allowed), `owner`, `group`, `mode` (quoted, since YAML reads a bare
-  `0644` as an octal integer), `template`, a one-line `description`, and for backend
-  files the `stage`, `image` or `project`, at which `backend prepare` deploys them.
-- **Every file says where it goes.** Each file whose format has comments opens with a
-  line naming the role and destination, such as
-  `# sandboxed-devenv host: rendered to /etc/nftables.conf`. Cloud-init needs
-  `#cloud-config` first, so those documents carry it on line two; JSON has no comments,
-  so `settings.json` relies on the manifest alone.
-- **A unit test keeps the three in step:** every manifest `source` exists, every file
-  under `files/` other than the manifest has an entry, every filename decodes to its
-  entry's `dest`, and every header agrees with its entry. It runs in CI from M1 on.
+- **Name is the destination.** Leading slash dropped, other slashes become `__`, dots
+  kept. Cloud-init documents have no destination, so they take `cloudinit__` plus the
+  NoCloud file name, with `cloudinit-image__` and `cloudinit-project__` for the backend's
+  two.
+- **Extension is the format.** The destination's own, or an added `.apparmor`,
+  `.ssh_config` or `.yaml`. A trailing `.tmpl` marks rendered content; anything else is
+  copied verbatim.
+- **Variable path segments** appear as `@@NAME@@`, as inside templates, so the filename
+  decodes to the manifest's `dest`. The Gateway branch is the one case today.
+- **`manifest.yaml`** holds what a file cannot say about itself: `dest`, `owner`,
+  `group`, `mode` (quoted, since YAML reads `0644` as octal), `template`, `description`,
+  and for backend files the `stage`, `image` or `project`.
+- **Each file opens with a header** naming its role and destination, such as
+  `# sandboxed-devenv host: rendered to /etc/nftables.conf`; on line two of cloud-init
+  documents, where `#cloud-config` comes first, and absent from JSON.
+- **`tests/test_files_manifest.py`** checks that the manifest, the tree, the filenames
+  and the headers agree.
 
 ## CLI surface
 
