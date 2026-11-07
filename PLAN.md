@@ -185,7 +185,7 @@ it is and whether it is rendered, and the file itself says so too.
 
 | Command | Role | Does |
 |---|---|---|
-| `sandboxed-devenv --version` | any | The package version; it must agree on every machine or `test provision` fails |
+| `sandboxed-devenv --version` | any | The package version; it must agree on every machine or `test end-to-end` fails |
 | `sandboxed-devenv doctor` | any | Which roles this machine can play, driver and tool versions, config and secrets dirs, the version on each client host and backend it can reach |
 | `sandboxed-devenv render [--out DIR]` | any | Renders every artifact (cloud-inits, nftables, AppArmor, ssh configs) and builds the wheel, without touching a VM. CI's entry point |
 | `sandboxed-devenv canary --role ROLE [--json]` | any | The probes for the client or backend role, run locally |
@@ -202,7 +202,9 @@ it is and whether it is rendered, and the file itself says so too.
 | `sandboxed-devenv creds ls [PROJECT]` | control | Every credential, scope, age, where it lives, how it is revoked |
 | `sandboxed-devenv creds rotate PROJECT [--deploy-key [OWNER/REPO]] [--claude-token]` | control | Regenerate inside the VM (`backend repo rekey` for one repository or all), re-register, update the inventory |
 | `sandboxed-devenv creds audit [--fix]` | control | Compares the inventory with `gh repo deploy-key list` on every repository it knows: retries pending revocations, reports keys GitHub holds that no project claims, and with `--fix` deletes them |
-| `sandboxed-devenv test provision` | control | End to end on real VMs, all three roles: builds or reuses the base image, creates a throwaway project, waits for its backend, runs the canary in the client and backend roles, checks SSH from `gw` to the backend and that the IDE backend service is up, compares `--version` across the three machines, then removes everything. Not covered: the interactive path (Gateway, client, preview, clipboard), provisioning the client host (`host install`), and the GitHub deploy-key flow |
+| `sandboxed-devenv test end-to-end` | control | End to end on real VMs, all three roles: builds or reuses the base image, creates a throwaway project, waits for its backend, runs the canary in the client and backend roles, checks SSH from `gw` to the backend and that the IDE backend service is up, compares `--version` across the three machines, then removes everything. Not covered: the interactive path (Gateway, client, preview, clipboard), provisioning the client host (`host install`), and the GitHub deploy-key flow |
+| `sandboxed-devenv test host` | control | Seconds, no VM created: `host install --check` for drift and the canary in the client role on the client host |
+| `sandboxed-devenv test backend PROJECT` | control | Seconds, on an existing backend: `backend status` and the canary in the backend role, for after an upgrade |
 | `sandboxed-devenv host install [--dry-run] [--check]` | client host | Provisions the host: `gw` user and linger, files from the manifest, AppArmor, sysctl, nftables, Gateway tarball. Linux only, needs root |
 | `sandboxed-devenv host check` | client host | Runs the canary in the client role as `gw` (through `client exec`) and prints the summary |
 | `sandboxed-devenv client start` | client host | What `gw-run` does: the runtime-dir and Wayland socket ACLs, then `client session` as `gw` through sudo |
@@ -232,7 +234,7 @@ One mechanism per operating system, and the result is the same everywhere:
   or a rebuild.
 - **Versions:** the version lives in `pyproject.toml` and `--version` reads it from the
   installed metadata. `doctor` and `ls` show the version on every host they can reach,
-  and `test provision` fails on skew.
+  and `test end-to-end` fails on skew.
 - **Dependencies:** runtime dependencies stay at `pydantic` and `pyyaml`, both with
   prebuilt wheels for `aarch64` and `x86_64`, since every VM installs them. Anything
   heavier goes in an optional dependency group used only on the control side.
@@ -416,12 +418,14 @@ Parity with today's rig, then the old scripts go.
       `utmctl list` and `incus list --format json` output; `remote.py` against recorded
       `--json` output; inventory round-trips; `policy.yaml` to nftables checked with
       `nft --check` on Linux; `host install --dry-run` plans.
-- [ ] `sandboxed-devenv test provision`: builds or reuses the image,
+- [ ] `sandboxed-devenv test end-to-end`: builds or reuses the image,
       `sandboxed-devenv new ci-<run>`, waits, runs the canary in both roles through
       `remote.py`, checks SSH from `gw` to the backend, that the backend service is
       present, and that `--version` agrees on the control side, the client host and the
-      backend, then `sandboxed-devenv rm`. Runs on the Mac on demand (`mise run
-      test-provision`) and later on the Framework; never in GitHub CI.
+      backend, then `sandboxed-devenv rm`. Runs on the Mac on demand (`mise run test-e2e`)
+      and later on the Framework; never in GitHub CI. `test host` and
+      `test backend PROJECT` are the cheap siblings: no VM is created and they run in
+      seconds.
 - [ ] The interactive checklist in `docs/runbook.md`: Gateway, client, Wayland toolkit in
       About, Markdown preview, clipboard both ways, Claude Code `/status`, git fetch
       without a key dialog, plugin install path. This is the part that stays manual.
@@ -448,7 +452,7 @@ Written before the laptop arrives, first run on it.
       --global ~/proj/ide_sandbox/sandboxed_devenv`, `client_host: local` in the
       config, `sudo sandboxed-devenv host install`, `sandboxed-devenv image build`,
       `sandboxed-devenv new` for the first project, `sandboxed-devenv host check`.
-- [ ] Run `sandboxed-devenv test provision` on the laptop; record timings in the summary
+- [ ] Run `sandboxed-devenv test end-to-end` on the laptop; record timings in the summary
       (step 6 of 4.9 asked for them).
 - [ ] The Framework's AppArmor and userns state is the same Ubuntu 26.04 default as
       `desk`; verify the profiles load and the client's embedded browser works before
@@ -480,8 +484,8 @@ Written before the laptop arrives, first run on it.
 | M1 client host | `desk` rebuilt from the slim template with the package installed; `sandboxed-devenv host check` 0 FAIL; Gateway via `client start`; preview and clipboard work | Mac |
 | M2 drivers and backend split | `sandboxed-devenv new` to a connected client on the Mac, the package installed in the backend; old scripts deleted | Mac |
 | M3 credentials | `sandboxed-devenv new` and `sandboxed-devenv rm` need no manual GitHub or Gateway step | Mac |
-| M4 testing | `mise run test-provision` passes on the Mac unattended, versions matching on all three machines | Mac |
-| M5 Framework | `sandboxed-devenv test provision` passes on the laptop; first real project opened | Framework |
+| M4 testing | `mise run test-e2e` passes on the Mac unattended, versions matching on all three machines | Mac |
+| M5 Framework | `sandboxed-devenv test end-to-end` passes on the laptop; first real project opened | Framework |
 
 M1 through M4 run on the Mac rig as it exists today, two UTM VMs, no nested
 virtualization. The Mac remains the place to test changes after the Framework is the daily
