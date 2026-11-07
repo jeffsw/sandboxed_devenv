@@ -58,7 +58,7 @@ def values() -> dict[str, str]:
         'DESK_PASSWORD': os.environ.get('DESK_PASSWORD', 'rehearsal'),
         'GIT_USER_NAME': os.environ.get('GIT_USER_NAME') or git_global('user.name') or 'Developer',
         'GIT_USER_EMAIL': os.environ.get('GIT_USER_EMAIL') or git_global('user.email') or 'developer@example.invalid',
-        'CANARY_B64': base64.b64encode(pathlib.Path('../canary.py').read_bytes()).decode(),
+        'CANARY_B64': base64.b64encode(pathlib.Path('../../sandboxed_devenv/canary.py').read_bytes()).decode(),
         'CLAUDE_SETTINGS_B64': base64.b64encode(settings_json().encode()).decode(),
     }
     return retdict
