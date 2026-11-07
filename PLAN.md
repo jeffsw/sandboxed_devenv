@@ -86,7 +86,10 @@ checkout unless asked otherwise. The inventory records every key with its GitHub
 - **Mechanism below, policy above.** Drivers know how to create a VM, attach cloud-init
   and find its address. They do not know what a backend is.
 - **Idempotent and inspectable.** Every mutating command has `--dry-run`, prints the
-  commands it would run, and can be re-run safely.
+  commands it would run, and can be re-run safely. A step expected to take more than a
+  few seconds says so before it starts, says why, and reports the time it took; the
+  hypervisor's own progress output is passed through where it exists, and the tool
+  draws no progress bars of its own.
 - **Secrets never enter rendered artifacts in CI.** Locally they come from a secrets
   directory or a secrets manager at render time; CI renders with placeholders. This is
   what `render.py` already does and it stays.
@@ -337,8 +340,9 @@ Parity with today's rig, then the old scripts go.
       `render.py` reads it; nothing else carries a version string.
 - [ ] `config.yaml` model in `config.py`: `client_host`, `vm_name_prefix`, backend
       defaults (`cpus: 4`, `memory_gib: 8`, `disk_gib: 32`), and the UTM address pool
-      (`192.168.64.20` upward; `.1` is the Mac, `.10` is `desk`). Each backend's address,
-      CPUs and memory are recorded in the inventory when it is created.
+      (`192.168.64.20` upward; `.1` is the Mac, `.10` is `desk`), and `incus_storage_dir`,
+      the directory of the Incus `dir` pool (default: Incus's own). Each backend's
+      address, CPUs and memory are recorded in the inventory when it is created.
 - [ ] Split `rehearsal/utm/backend/user-data.tmpl` into
       `files/backend/cloudinit-image__user-data.yaml.tmpl` (packages including `pipx`,
       `gh` apt source, IDE tarball and `registerBackendLocationForGateway`, plugin
@@ -369,6 +373,11 @@ Parity with today's rig, then the old scripts go.
       AppleScript with the copy, the project's seed ISO, and the CPUs and memory asked
       for; the per-project seed rendered from `cloudinit-project__user-data.yaml.tmpl`;
       readiness from `backend status`.
+- [ ] Slow steps announce themselves: before copying a base image, downloading a cloud
+      image, or waiting for a first boot, `new`, `clone` and `image build` print what
+      they are doing and why it takes time (for a copy: the size and whether the
+      filesystem shares blocks), then the elapsed time when the step ends. The Incus
+      driver passes through Incus's own progress for copies.
 - [ ] Routing on `desk` for several backends: the desk template carries two `/25` routes
       via the Mac, more specific than the on-link `/24`, so every backend is reachable
       without a per-backend change. Verified as part of the gate; the fallback is a `/32`
@@ -463,16 +472,19 @@ Written before the laptop arrives, first run on it.
 
 - [ ] `control_driver_incus.py`: `incus launch images:ubuntu/<release>/cloud <vm> --vm`
       with `cloud-init.user-data` and `cloud-init.network-config` config keys, `incus
-      publish` for the base image, `incus copy` for clones, `incus list --format json`
-      for state and addresses, `incus console` for the serial console, `incus file pull`
-      for the host keys.
+      publish` for the base image, `incus copy` for clones (a full copy on a `dir` pool
+      without reflinks, reported as a slow step), `incus list --format json` for state
+      and addresses, `incus console` for the serial console, `incus file pull` for the
+      host keys. The pool is `dir` on `incus_storage_dir`, created by `host install` if
+      absent.
 - [ ] Host nftables from `policy.yaml` covering both halves: the `gw` uid for the client
       and the forward chain on the Incus bridge for the VMs. Incus network ACLs are the
       alternative if the bridge rules fight with Incus's own firewall management; decide
       on the laptop.
 - [ ] `docs/linux-laptop-install.md`: Ubuntu 26.04 (per Framework's guide on the 13 Pro),
-      full-disk encryption, a separate volume for the Incus storage pool, the operations
-      user or VM for router access (summary section 5), then the package:
+      full-disk encryption, no separate volume (the Incus pool is a directory on the
+      root filesystem; only free space matters), the operations user or VM for router
+      access (summary section 5), then the package:
       `sudo pipx install --global ~/proj/ide_sandbox/sandboxed_devenv`,
       `client_host: local` in the config, `sudo sandboxed-devenv host install`,
       `sandboxed-devenv image build`, `sandboxed-devenv new` for the first project,
@@ -488,7 +500,8 @@ Written before the laptop arrives, first run on it.
 - [ ] Adjustable backend disk size after creation: grow the raw disk or the Incus volume,
       then the filesystem inside, through `resources --disk-gib`.
 - [ ] Snapshots before disposal (`sandboxed-devenv snapshot PROJECT`), so uncommitted work
-      in a project VM is recoverable for a while.
+      in a project VM is recoverable for a while; a full copy on a `dir` pool, reported
+      as a slow step.
 - [ ] Version bump workflow: change `versions.yaml` or the package version,
       `sandboxed-devenv image build`, `sandboxed-devenv ls` shows which backends run an
       older image or package; `sandboxed-devenv upgrade PROJECT` recreates from the new
@@ -555,8 +568,15 @@ daily machine, which is the reason the UTM driver is kept rather than retired.
       pointing at the alias; it works for any git command from any directory. Rejected:
       `core.sshCommand` set per checkout, which keeps plain URLs but applies only inside
       that checkout, so submodules and fresh clones miss it.
-- [ ] **Incus storage.** Directory, btrfs or ZFS pool on the Linux laptop; affects the
-      partitioning on install day. Proposed: btrfs on its own volume.
+- [x] **Incus storage.** Decided 7 November: a `dir` pool on whatever filesystem the
+      laptop already has, in a directory set by `config.yaml`, so no filesystem type is
+      required and install day needs no partitioning. Each backend's disk is a raw file
+      in it, as on the Mac. The guest owns its filesystem behind a virtio block device
+      whatever the pool type, so isolation is unaffected. Costs: `clone` and snapshots
+      are full copies where the filesystem has no reflinks (ext4), and Incus cannot
+      enforce per-backend disk quotas on `dir`. Reversible: a btrfs pool, even one on a
+      loop file in the same directory, can be added later and backends moved to it.
+      Rejected: btrfs or ZFS on a dedicated volume, which would prescribe a filesystem.
 - [x] **Host distribution.** Decided 7 November: Ubuntu 26.04 on the Linux laptop, the
       same release as the VMs (AppArmor profiles, pipx 1.8.0, Framework's certification).
       Changing it would reopen M1.
