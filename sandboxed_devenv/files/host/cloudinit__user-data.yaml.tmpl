@@ -32,9 +32,20 @@ users:
     sudo: ALL=(ALL) NOPASSWD:ALL
     lock_passwd: false
     plain_text_passwd: "@@DESK_PASSWORD@@"
-    # The rig key, kept on the Mac in ~/.sandboxed_devenv/secrets/, so the Mac can SSH in.
+    # The control key, kept on the Mac in ~/.sandboxed_devenv/secrets/, so the Mac can SSH in.
+    # Not the sandbox key: gw's key must open backends, never the host user.
     ssh_authorized_keys:
-      - @@RIG_PUBKEY@@
+      - @@CONTROL_PUBKEY@@
+
+# The VM's SSH host key, minted by the control side into this seed so its public half is pinned
+# on the control side and the client host before the VM boots: no trust on first use. Only the
+# ed25519 key exists (ssh_genkeytypes), so nothing unpinned answers.
+ssh_deletekeys: true
+ssh_genkeytypes: [ed25519]
+ssh_keys:
+  ed25519_private: |
+@@HOST_KEY_PRIVATE@@
+  ed25519_public: @@HOST_KEY_PUBLIC@@
 
 runcmd:
   # Boot into GDM from now on. No reboot here: `client-host new` reboots once `host install`
