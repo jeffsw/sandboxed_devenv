@@ -148,6 +148,10 @@ def step_files(ctx: Context) -> list[Outcome]:
         except render.RenderError as error:
             retlist.append(Outcome(f"file {entry.dest}", FAILED, str(error)))
             continue
+        if entry.keep and dest.exists():
+            # Written once; `connect add` manages its content from then on.
+            retlist.append(Outcome(f"file {dest}", UNCHANGED, "kept: another command manages its content"))
+            continue
         result = sync_file(dest, content.encode(), entry.owner, entry.group, entry.mode_bits, ctx.apply)
         if result.status == CHANGED:
             ctx.changed.add(dest)

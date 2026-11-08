@@ -1,0 +1,9 @@
+# sandboxed-devenv host: rendered to /home/gw/.ssh/config
+# The client sandbox knows the backend VMs and nothing else. `connect add` writes one stanza
+# per project under config.d/ (Host <project> <address>, user dev, gw's key, the pinned host
+# key); nothing here names a backend.
+Include config.d/*
+Host *
+    ForwardAgent no
+    AddKeysToAgent no
+    IdentitiesOnly yes
