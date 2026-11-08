@@ -8,12 +8,15 @@ directory, for tests and for a second copy of the tool's state. Under ``sudo`` t
 the invoking user's, not root's, so ``sudo sandboxed-devenv host install`` reads the secrets that
 user put there.
 
-Three pydantic models: ``UserConfig`` for ``config.yaml``, ``ProjectConfig`` for the
-``/etc/sandboxed-devenv/project.yaml`` a project's backend receives from its cloud-init, and
-``Versions`` for the package's own ``versions.yaml``.
+Four pydantic models: ``UserConfig`` for ``config.yaml``, ``ProjectConfig`` for the
+``/etc/sandboxed-devenv/project.yaml`` a project's backend receives from its cloud-init,
+``Versions`` for the package's own ``versions.yaml``, and ``Policy`` for ``policy.yaml``, the
+egress allowlists and the VM subnet (the package's copy, or ``~/.sandboxed_devenv/policy.yaml``
+when the user wrote one, since the uplink interface is the host's own).
 """
 
 import datetime
+import ipaddress
 import os
 import pathlib
 import pwd
@@ -36,6 +39,10 @@ RIG_KEY_NAME = "gw_ed25519"
 CLAUDE_TOKEN_NAME = "claude_oauth_token"
 DEFAULT_VM_NAME_PREFIX = "idesbx-"
 ARCHITECTURES = ("aarch64", "x86_64")
+# The client host VM on the Mac rig; the Linux laptop is its own client host and has none.
+CLIENT_HOST_VM_SUFFIX = "desk"
+CLIENT_HOST_HOSTNAME = "desk"
+PROJECT_NAME_PATTERN = r"^[A-Za-z0-9_.-]+$"
 
 
 def invoking_user_home() -> pathlib.Path:
@@ -91,6 +98,12 @@ def downloads_dir() -> pathlib.Path:
     return retval
 
 
+def user_policy_file() -> pathlib.Path:
+    """A policy.yaml of the user's own, overriding the package's copy when present."""
+    retval = home_dir() / "policy.yaml"
+    return retval
+
+
 def read_secret(name: str) -> str | None:
     """A secret's content, stripped, or None when the file is absent or empty."""
     path = secrets_dir() / name
@@ -141,6 +154,13 @@ class IncusConfig(pydantic.BaseModel):
     storage_dir: str | None = None
 
 
+class GitIdentity(pydantic.BaseModel):
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+    user_name: str
+    user_email: str
+
+
 class UserConfig(pydantic.BaseModel):
     """``~/.sandboxed_devenv/config.yaml``; every field has a default, so the file is optional."""
 
@@ -152,9 +172,16 @@ class UserConfig(pydantic.BaseModel):
     backend: BackendDefaults = pydantic.Field(default_factory=BackendDefaults)
     utm: UtmConfig = pydantic.Field(default_factory=UtmConfig)
     incus: IncusConfig = pydantic.Field(default_factory=IncusConfig)
+    # The identity for commits made inside a backend; absent, `new` reads this machine's global
+    # git config.
+    git: GitIdentity | None = None
 
     def vm_name(self, project: str) -> str:
         retval = f"{self.vm_name_prefix}{project}"
+        return retval
+
+    def client_host_vm_name(self) -> str:
+        retval = self.vm_name(CLIENT_HOST_VM_SUFFIX)
         return retval
 
 
@@ -191,19 +218,12 @@ class Repository(pydantic.BaseModel):
         return retval
 
 
-class GitIdentity(pydantic.BaseModel):
-    model_config = pydantic.ConfigDict(extra="forbid")
-
-    user_name: str
-    user_email: str
-
-
 class ProjectConfig(pydantic.BaseModel):
     """What a project's backend learns from its cloud-init, root-owned mode 0600 because of the token."""
 
     model_config = pydantic.ConfigDict(extra="forbid")
 
-    project: str = pydantic.Field(pattern=r"^[A-Za-z0-9_.-]+$")
+    project: str = pydantic.Field(pattern=PROJECT_NAME_PATTERN)
     repositories: list[Repository] = pydantic.Field(default_factory=list)
     git: GitIdentity
     claude_oauth_token: str | None = None
@@ -305,4 +325,74 @@ def versions_file() -> pathlib.Path:
 
 def load_versions() -> Versions:
     retval = Versions(**yaml.safe_load(versions_file().read_text()))
+    return retval
+
+
+# --- policy.yaml -------------------------------------------------------------------------------
+
+
+class EgressPolicy(pydantic.BaseModel):
+    """What one side may reach beyond the VM subnet. ``cidrs`` become nftables set elements;
+    ``hosts`` are recorded for the day the ruleset can follow names (nft refuses a name that
+    resolves to several addresses, found 8 November 2026 on desk; M5 decides the mechanism)."""
+
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+    cidrs: list[str] = pydantic.Field(default_factory=list)
+    hosts: list[str] = pydantic.Field(default_factory=list)
+    ports: list[int] = pydantic.Field(default_factory=lambda: [443])
+
+    @pydantic.field_validator("cidrs")
+    @classmethod
+    def _valid_cidrs(cls, value: list[str]) -> list[str]:
+        for cidr in value:
+            ipaddress.ip_network(cidr)
+        retval = value
+        return retval
+
+
+class Policy(pydantic.BaseModel):
+    """``policy.yaml``: the VM subnet, the client host's uplink, both egress allowlists, and
+    whether `host install` enables the nftables service."""
+
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+    vm_subnet: str = "192.168.64.0/24"
+    uplink_interface: str = "en*"
+    enforce: bool = False
+    client: EgressPolicy = pydantic.Field(default_factory=EgressPolicy)
+    backend: EgressPolicy = pydantic.Field(default_factory=EgressPolicy)
+
+    @pydantic.field_validator("vm_subnet")
+    @classmethod
+    def _valid_subnet(cls, value: str) -> str:
+        ipaddress.ip_network(value)
+        retval = value
+        return retval
+
+    def subnet_halves(self) -> tuple[str, str]:
+        """The two halves of the VM subnet: on the Mac rig, routes to them through the Mac are
+        more specific than desk's on-link route, so every backend is reachable without a
+        per-backend change (PLAN.md M2, routing on desk)."""
+        network = ipaddress.ip_network(self.vm_subnet)
+        lower, upper = network.subnets(prefixlen_diff=1)
+        retval = (str(lower), str(upper))
+        return retval
+
+
+def package_policy_file() -> pathlib.Path:
+    retval = pathlib.Path(__file__).resolve().parent / "policy.yaml"
+    return retval
+
+
+def policy_file() -> pathlib.Path:
+    """The user's policy.yaml when there is one, else the package's."""
+    retval = user_policy_file()
+    if not retval.is_file():
+        retval = package_policy_file()
+    return retval
+
+
+def load_policy() -> Policy:
+    retval = Policy(**(yaml.safe_load(policy_file().read_text()) or {}))
     return retval

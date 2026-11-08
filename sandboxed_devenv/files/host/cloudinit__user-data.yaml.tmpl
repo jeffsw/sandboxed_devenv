@@ -2,9 +2,9 @@
 # sandboxed-devenv host: cloud-init user-data for the desk VM on the Mac rig (summary, 4.9)
 # First boot installs the desktop and the packages `host install` expects, and creates the
 # host user with the rig key. Everything else (the gw user, the files, AppArmor, nftables,
-# the Gateway launcher) is `sudo sandboxed-devenv host install`, which
-# rehearsal/utm/provision-desk.sh runs over SSH once cloud-init is done: the same two
-# commands as the Linux laptop's install day, after `sudo pipx install --global` of the wheel.
+# the Gateway launcher) is `sudo sandboxed-devenv host install`, which `client-host new` runs
+# over SSH once cloud-init is done: the same two commands as the Linux laptop's install day,
+# after `sudo pipx install --global` of the wheel.
 
 hostname: desk
 manage_etc_hosts: true
@@ -25,7 +25,7 @@ packages:
 
 users:
   # Plays "you" on the host: logs in to GNOME, runs `sandboxed-devenv client start`. Has sudo.
-  - name: jsw
+  - name: @@CLIENT_HOST_USER@@
     gecos: Host user
     groups: [adm, sudo]
     shell: /bin/bash
@@ -37,8 +37,8 @@ users:
       - @@RIG_PUBKEY@@
 
 runcmd:
-  # Boot into GDM from now on. No reboot here: provision-desk.sh reboots once `host install`
+  # Boot into GDM from now on. No reboot here: `client-host new` reboots once `host install`
   # is done, so there is no race between the reboot and its SSH session.
   - systemctl set-default graphical.target
 
-final_message: "desk: cloud-init finished after $UPTIME seconds; provision-desk.sh does the rest"
+final_message: "desk: cloud-init finished after $UPTIME seconds; client-host new does the rest"

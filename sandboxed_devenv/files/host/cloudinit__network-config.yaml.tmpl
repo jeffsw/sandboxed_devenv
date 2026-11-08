@@ -1,0 +1,22 @@
+# sandboxed-devenv host: cloud-init network-config for the desk VM on the Mac rig
+# A static address on UTM's shared network, rendered through systemd-networkd: with
+# NetworkManager, which the desktop install brings, the dracut initramfs's catch-all DHCP rule
+# wins the NIC first (seen 9 October 2026). The netplan match is the exact NIC name. UTM's
+# shared network marks each VM's port on the Mac's bridge "private", so VMs cannot reach each
+# other directly; the Mac forwards. The two half-subnet routes through the Mac are more
+# specific than the on-link route, so every backend is reachable without a per-backend route.
+version: 2
+renderer: networkd
+ethernets:
+  @@INTERFACE@@:
+    dhcp4: false
+    addresses: [@@CLIENT_HOST_ADDRESS@@/@@PREFIX_LENGTH@@]
+    routes:
+      - to: default
+        via: @@GATEWAY@@
+      - to: @@SUBNET_LOWER_HALF@@
+        via: @@GATEWAY@@
+      - to: @@SUBNET_UPPER_HALF@@
+        via: @@GATEWAY@@
+    nameservers:
+      addresses: [@@NAMESERVER@@]

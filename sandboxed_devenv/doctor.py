@@ -78,8 +78,12 @@ def cmd_doctor(args) -> int:
     lines.append(_dir_line("home", config.home_dir()))
     config_state = "present" if config.config_file().is_file() else "absent"
     lines.append(f"config: {config.config_file()} ({config_state})")
-    lines.append(_dir_line("inventory", config.inventory_dir()))
+    inventory = config.inventory_dir()
+    projects = len(list(inventory.glob("*.json"))) if inventory.is_dir() else 0
+    lines.append(f"inventory: {inventory} ({'present' if inventory.is_dir() else 'absent'}, {projects} projects)")
     lines.append(_dir_line("secrets", config.secrets_dir()))
+    policy_source = "the user's" if config.policy_file() == config.user_policy_file() else "the package's"
+    lines.append(f"policy: {config.policy_file()} ({policy_source})")
     for line in lines:
         print(line)
     retval = 0
