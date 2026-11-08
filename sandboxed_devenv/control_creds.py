@@ -291,7 +291,7 @@ def register_and_clone(github: GitHub, backend, record: ProjectRecord, command: 
         try:
             print(f"{command}: {register_key(github, record, repository)}", flush=True)
         except GitHubError as error:
-            print(f"{command}: {repository.name}: registration failed: {error}", file=sys.stderr)
+            print(common.warning(f"{command}: {repository.name}: registration failed: {error}"), file=sys.stderr)
             retval += 1
             continue
         control_inventory.save(record)
@@ -299,8 +299,8 @@ def register_and_clone(github: GitHub, backend, record: ProjectRecord, command: 
             try:
                 print(f"{command}: {clone_in_backend(backend, repository)}", flush=True)
             except RemoteError as error:
-                print(f"{command}: {repository.name}: clone failed: {error}; `sandboxed-devenv repo add "
-                      f"{record.project} {repository.name}` retries it", file=sys.stderr)
+                print(common.warning(f"{command}: {repository.name}: clone failed: {error}; `sandboxed-devenv repo add "
+                                     f"{record.project} {repository.name}` retries it"), file=sys.stderr)
             control_inventory.save(record)
     return retval
 
@@ -312,7 +312,8 @@ def revoke_all(github: GitHub, record: ProjectRecord, command: str) -> list[Repo
         if repository.state == UNREGISTERED and repository.github_key_id is None and not repository.public_key:
             continue
         revoked, line = revoke_key(github, repository)
-        print(f"{command}: {line}", file=None if revoked else sys.stderr, flush=True)
+        print(f"{command}: {line}" if revoked else common.warning(f"{command}: {line}"), file=None if revoked else sys.stderr,
+              flush=True)
         if not revoked:
             retlist.append(repository)
     return retlist
@@ -810,7 +811,8 @@ def audit(github: GitHub, records: list[ProjectRecord], fix: bool, command: str 
                     problems += 1
             else:
                 how = "--fix deletes it" if ours else "not this tool's title, left alone"
-                print(f"{command}: {name}: unclaimed key id {item['id']} ({item.get('title')}, {item.get('created_at', '?')[:10]}); {how}")
+                print(common.warning(f"{command}: {name}: unclaimed key id {item['id']} ({item.get('title')}, "
+                                     f"{item.get('created_at', '?')[:10]}); {how}"))
                 problems += 1
     for record in records:
         if record.project in changed:
