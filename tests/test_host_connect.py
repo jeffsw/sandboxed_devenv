@@ -110,9 +110,12 @@ def test_add_ls_rm_write_the_three_files(paths, capsys):
 
 def test_add_skips_the_gateway_file_while_gateway_runs(paths, monkeypatch, capsys):
     monkeypatch.setattr(host_connect, "gateway_running", lambda paths: True)
+    monkeypatch.setenv("SANDBOXED_DEVENV_COLOR", "always")
     assert cli.main(["connect", "add", "p", "192.168.64.23", KEYS[0]]) == 0
     out = capsys.readouterr().out
     assert "Gateway is running" in out
+    assert "\033[1;33mconnect add: Gateway is running" in out
+    monkeypatch.delenv("SANDBOXED_DEVENV_COLOR")
     assert not paths.ssh_configs.exists()
     assert paths.stanza_file("p").exists()
     paths.ssh_configs.parent.mkdir(parents=True)

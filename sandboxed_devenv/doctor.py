@@ -2,11 +2,13 @@
 
 import platform
 import shutil
+import subprocess
 import sys
 
 from sandboxed_devenv import common, config
 
 DRIVER_COMMANDS = {"utm": "utmctl", "incus": "incus"}
+GITHUB_CLI = "gh"
 DISK_TOOLS = ("qemu-img", "hdiutil")
 CLIENT_SANDBOX_USER = "gw"
 
@@ -58,6 +60,15 @@ def cmd_doctor(args) -> int:
             tool_parts.append(f"{command}: {shutil.which(command) or 'not found'}")
         lines.append("disk tools: " + "; ".join(tool_parts))
 
+    gh = shutil.which(GITHUB_CLI)
+    if gh:
+        completed = subprocess.run([gh, "api", "user", "--jq", ".login"], capture_output=True, text=True)
+        if completed.returncode == 0 and completed.stdout.strip():
+            lines.append(f"github cli: {gh}, logged in as {completed.stdout.strip()} (deploy keys are registered through it)")
+        else:
+            lines.append(f"github cli: {gh}, not logged in; `gh auth login` before `new --repo` or `repo add`")
+    else:
+        lines.append("github cli: gh not found; `new --repo` and `repo add` need it to register deploy keys")
     usable = [driver for driver, path in found.items() if path]
     if usable:
         control = "yes (" + ", ".join(usable) + ")"

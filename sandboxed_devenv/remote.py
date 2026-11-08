@@ -94,9 +94,10 @@ class Remote:
         return retlist
 
     def run(self, remote_command: list[str], check: bool = True, capture: bool = False,
-            timeout: float | None = None, quiet: bool = False) -> subprocess.CompletedProcess:
-        """The command on the far side; ``quiet`` discards its output when nothing is captured.
-        No shell expansion."""
+            timeout: float | None = None, quiet: bool = False, input: str | None = None) -> subprocess.CompletedProcess:
+        """The command on the far side; ``quiet`` discards its output when nothing is captured;
+        ``input`` is fed to its standard input (a file's content through `sudo tee`, so nothing
+        secret lands in a temporary file). No shell expansion."""
         kwargs = {}
         if capture:
             kwargs["capture_output"] = True
@@ -105,6 +106,8 @@ class Remote:
             kwargs["stderr"] = subprocess.DEVNULL
         if timeout is not None:
             kwargs["timeout"] = timeout
+        if input is not None:
+            kwargs["input"] = input
         retval = self.runner.run(self.ssh_command(remote_command), **kwargs)
         if check and retval.returncode != 0:
             detail = (retval.stderr or "").strip() if capture else ""
@@ -118,6 +121,9 @@ class Remote:
         after adding ``--json`` to the command unless ``json_flag`` is off (for the `backend repo`
         commands, which print JSON and take no flag)."""
         remote_command = [self.command_path, *args]
+        if not parse_json and common.color_wanted(sys.stdout):
+            # The far side sees a pipe, not our terminal; tell it to colour its warnings anyway.
+            remote_command = ["env", f"{common.COLOR_ENV_VAR}=always", *remote_command]
         if sudo:
             remote_command = ["sudo", *remote_command]
         if parse_json:
@@ -222,7 +228,7 @@ class Local:
         return retval
 
     def run(self, command: list[str], check: bool = True, capture: bool = False, timeout: float | None = None,
-            quiet: bool = False) -> subprocess.CompletedProcess:
+            quiet: bool = False, input: str | None = None) -> subprocess.CompletedProcess:
         kwargs = {}
         if capture:
             kwargs["capture_output"] = True
@@ -231,6 +237,8 @@ class Local:
             kwargs["stderr"] = subprocess.DEVNULL
         if timeout is not None:
             kwargs["timeout"] = timeout
+        if input is not None:
+            kwargs["input"] = input
         retval = self.runner.run(command, **kwargs)
         if check and retval.returncode != 0:
             raise RemoteError(f"{shlex.join(command)} failed with status {retval.returncode}")
