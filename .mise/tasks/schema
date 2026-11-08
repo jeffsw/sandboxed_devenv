@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="cloud-init schema validation of every rendered user-data: the package's host and backend documents and the rig's seeds (Linux; skipped elsewhere unless REQUIRE_LINUX_VALIDATORS=1)"
+#MISE description="cloud-init schema validation of every rendered cloud-init document: three user-data and two network-config (Linux; skipped elsewhere unless REQUIRE_LINUX_VALIDATORS=1)"
 #MISE depends=["render"]
 set -euo pipefail
 cd "$MISE_PROJECT_ROOT"
@@ -15,8 +15,6 @@ documents=(
     build/host/cloudinit/user-data
     build/backend/cloudinit-image/user-data
     build/backend/cloudinit-project/user-data
-    rehearsal/utm/build/desk-seed/user-data
-    rehearsal/utm/build/backend-seed/user-data
 )
 for document in "${documents[@]}"; do
     # The schema check logs a harmless datasource warning when not run inside a cloud-init'd instance.
@@ -24,6 +22,12 @@ for document in "${documents[@]}"; do
     cloud-init schema --config-file "$document" >/dev/null 2>&1
 done
 # network-config has its own schema.
-cloud-init schema --schema-type network-config --config-file build/backend/cloudinit/network-config 2>&1 | grep -v 'WARNING' || true
-cloud-init schema --schema-type network-config --config-file build/backend/cloudinit/network-config >/dev/null 2>&1
-echo "schema: ok (${#documents[@]} user-data documents and one network-config)"
+networks=(
+    build/host/cloudinit/network-config
+    build/backend/cloudinit/network-config
+)
+for network in "${networks[@]}"; do
+    cloud-init schema --schema-type network-config --config-file "$network" 2>&1 | grep -v 'WARNING' || true
+    cloud-init schema --schema-type network-config --config-file "$network" >/dev/null 2>&1
+done
+echo "schema: ok (${#documents[@]} user-data documents and ${#networks[@]} network-config documents)"

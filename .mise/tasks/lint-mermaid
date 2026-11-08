@@ -3,11 +3,11 @@
 #MISE depends=["lint-doc"]
 set -euo pipefail
 cd "$MISE_PROJECT_ROOT"
-blocks=(rehearsal/utm/build/mermaid/*.mmd)
+blocks=(build/mermaid/*.mmd)
 for block in "${blocks[@]}"; do
     npx --yes @mermaid-js/mermaid-cli@12.0.0 \
         --quiet --input "$block" --output "${block%.mmd}.svg" \
-        --puppeteerConfigFile rehearsal/ci/puppeteer-config.json
+        --puppeteerConfigFile ci/puppeteer-config.json
     echo "rendered $block"
 done
 echo "lint-mermaid: ok (${#blocks[@]} diagrams)"
