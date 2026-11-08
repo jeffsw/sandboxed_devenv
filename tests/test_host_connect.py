@@ -126,6 +126,14 @@ def test_add_skips_the_gateway_file_while_gateway_runs(paths, monkeypatch, capsy
     assert len(host_connect.ssh_configs_entries(paths.ssh_configs.read_text())) == 1
 
 
+def test_add_force_writes_the_gateway_entry_while_gateway_runs(paths, monkeypatch, capsys):
+    monkeypatch.setattr(host_connect, "gateway_running", lambda paths: True)
+    assert cli.main(["connect", "add", "p", "192.168.64.23", KEYS[0], "--force"]) == 0
+    out = capsys.readouterr().out
+    assert "writing its entry anyway" in out
+    assert host_connect.ssh_configs_entries(paths.ssh_configs.read_text())[0]["host"] == "192.168.64.23"
+
+
 def test_add_needs_a_key(paths, capsys):
     assert cli.main(["connect", "add", "p", "192.168.64.23", "nonsense"]) == 2
     assert "host key" in capsys.readouterr().err

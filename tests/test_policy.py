@@ -81,3 +81,12 @@ def test_doctor_names_the_policy_file(tmp_path, monkeypatch, capsys):
     assert "policy: " in out
     assert "the package's" in out
     assert "0 projects" in out
+    assert "claude token policy: shared" in out and "claude_oauth_token: absent" in out
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "claude_oauth_token").write_text("op://Private/Claude/credential\n")
+    (tmp_path / "secrets" / "claude_oauth_token.p").write_text("tok\n")
+    assert cli.main(["doctor"]) == 0
+    out = capsys.readouterr().out
+    assert "claude_oauth_token: 1Password reference op://Private/Claude/credential" in out
+    assert "claude_oauth_token.p: file" in out
+    assert "tok" not in out.replace("claude_oauth_token", "").replace("token policy", "")
