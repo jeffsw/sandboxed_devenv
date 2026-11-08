@@ -226,7 +226,7 @@ it is and whether it is rendered:
 | `sandboxed-devenv client start` | client host | What `gw-run` does: the runtime-dir and Wayland socket ACLs, then `client session` as `gw` through sudo |
 | `sandboxed-devenv client session` | client host | As `gw`: the private Xwayland with its cookie, then the Gateway launcher |
 | `sandboxed-devenv client exec -- CMD` | client host | What `gw-exec` does: run a command as `gw` with its display and cookie |
-| `sandboxed-devenv connect add / rm / ls` | client host | Gateway's `sshConfigs.xml` entry, the `Host` stanza in `gw`'s `ssh_config`, the pinned key in `known_hosts` |
+| `sandboxed-devenv connect add [--force] / rm / ls` | client host | Gateway's `sshConfigs.xml` entry (while Gateway is not running, or with `--force`), the `Host` stanza in `gw`'s `ssh_config`, the pinned key in `known_hosts` |
 | `sandboxed-devenv backend prepare` | backend | First boot of a project's backend: GitHub host keys, git identity, Claude settings, `IdentityAgent none`, then `backend repo add` for each repository listed in `/etc/sandboxed-devenv/project.yaml` |
 | `sandboxed-devenv backend status [--json]` | backend | cloud-init done, IDE backend registered, package version, repositories with their key fingerprints, SSH host public keys |
 | `sandboxed-devenv backend repo add / rm / rekey / ls` | backend | The VM side of `repo`: mint or delete a repository's key pair and alias stanza, clone or keep the checkout, print the public key as JSON |
@@ -570,6 +570,12 @@ Parity with today's rig, then the old scripts go.
       its window regains focus (StoreReloadManager), so writing the entry and letting the
       user focus Gateway may be enough; else Gateway's host field can take the project's
       alias from gw's `ssh_config` (`Host <project>`), which needs no entry at all.
+      `connect add --force` (8 November) writes the entry regardless, for the experiment:
+      with Gateway open on desk, `sandboxed-devenv new` a project, then on desk
+      `sudo sandboxed-devenv connect add PROJECT ADDRESS "HOSTKEY" --force` with the key
+      from `ls --json` (`ssh_host_key` in the inventory record), give Gateway's window
+      focus and look for the connection, then quit Gateway and see whether the entry
+      survived in the file.
 - [x] Split the rig key in two. Until 8 November one pair, `secrets/gw_ed25519`, was both
       the control side's login to every VM (desk as `jsw`, backends as `dev`) and gw's key
       to the backends (`/home/gw/.ssh/vm_ed25519`). On the Mac rig desk's `jsw` account
@@ -586,7 +592,9 @@ Parity with today's rig, then the old scripts go.
       desk then needs `client-host provision` (the SSH half of `client-host new` on an
       existing desk: wheel, sandbox key, `host install`), and a backend made before the
       split is reachable by gw again after `rm` and `new`. `creds ls` shows both pairs.
-      Done 8 November.
+      Done 8 November, and run through by the user the same day: `client-host provision`
+      changed only gw's key pair on desk, the old backend was removed, a new one made with
+      both keys, and Gateway connected to it with the sandbox key.
 - [x] Host key pinning, done the other way round: instead of reading the VM's host key
       out after boot (the serial console on UTM, the guest on Incus), the control side
       mints the ed25519 host key pair into the seed with cloud-init's `ssh_keys`
@@ -602,12 +610,21 @@ Parity with today's rig, then the old scripts go.
       key files beside it (left by the image's first boot or made by Ubuntu's service), so
       the backend's `sshd_config.d/10-backend.conf` names the ed25519 key as the only
       `HostKey`, and sshd offers nothing unpinned.
-- [ ] Secrets dir: `~/.sandboxed_devenv/secrets/` (mode 0700) holding the rig key pair
-      and `claude_oauth_token`, one file per secret and none of them in `config.yaml`;
-      optional `op://` references there are resolved with the 1Password CLI at render
-      time. `sandboxed-devenv doctor` reports which is in use.
-- [ ] Policy knob in the user config: one Claude token for all VMs or one per trust
-      level; default one token, as the open question in the summary suggests.
+- [x] Secrets dir: `~/.sandboxed_devenv/secrets/` (mode 0700) holding the two key pairs
+      and `claude_oauth_token`, one file per secret and none of them in `config.yaml`; a
+      file holding an `op://vault/item/field` reference is resolved with the 1Password CLI
+      (`op read`) when the secret is read, so the reference may live in config management
+      while the value never does; a missing or signed-out `op` is reported before any VM is
+      made. `sandboxed-devenv doctor` reports each secret's source (absent, file or the
+      reference), the per-project token files it finds, the token policy and whether `op`
+      is on the PATH. Done 8 November.
+- [x] Policy knob in the user config: `backend.claude_token` is `shared` (the one token in
+      `secrets/claude_oauth_token` for every backend, the default, as the open question in
+      the summary suggested), `per-project` (`secrets/claude_oauth_token.<project>`, none
+      when absent) or `none`; and `backend.disposable_claude_token`, off by default, since a
+      backend for stranger code should not carry the account's token. `new`, `clone` (always
+      disposable) and `creds rotate --claude-token` follow it and say which token they used
+      and why. Done 8 November.
 - [x] The deploy key per VM, `IdentityAgent none`, the Claude token in `settings.json`,
       and the pre-provisioned Gateway connection are proven on the rig; registration is
       still manual (summary 4.9, "manual steps").
