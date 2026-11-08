@@ -209,7 +209,8 @@ def new(args) -> int:
         remote.pin_host_key(KNOWN_HOSTS_NAME, host, host_public)
         with common.slow_step(COMMAND, "create", f"UTM imports the {disk_gib} GiB disk and the seed ISO into the bundle of {vm}, "
                               "then relaunches to pick up the input devices"):
-            driver.create(VmSpec(name=vm, disk=disk, cpus=cpus, memory_gib=memory_gib, seed_dir=seed_dir, display=True))
+            driver.create(VmSpec(name=vm, disk=disk, cpus=cpus, memory_gib=memory_gib, seed_dir=seed_dir, display=True,
+                                 disk_gib=disk_gib))
         disk.unlink()
         driver.start(vm)
         desk = client(user_config, runner)
