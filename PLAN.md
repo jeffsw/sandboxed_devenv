@@ -539,6 +539,10 @@ Parity with today's rig, then the old scripts go.
 - [ ] `repo add`, `repo rm` and `repo ls` on the control side, and `creds audit`, which
       compares the inventory with `gh repo deploy-key list` on every repository it
       knows: pending revocations retried, unclaimed keys reported, `--fix` deletes them.
+      Keys registered by hand at M2 have no GitHub id in the inventory, only the public
+      key and fingerprint `new` recorded, so the audit adopts a key GitHub holds whose
+      text matches an inventory entry (storing the id and marking it `active`) before
+      calling anything unclaimed.
 - [ ] Split the rig key in two. Today one pair, `secrets/gw_ed25519`, is both the control
       side's login to every VM (desk as `jsw`, backends as `dev`) and gw's key to the
       backends (`/home/gw/.ssh/vm_ed25519`). On the Mac rig desk's `jsw` account authorizes
