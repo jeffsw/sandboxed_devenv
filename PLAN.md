@@ -534,6 +534,17 @@ Parity with today's rig, then the old scripts go.
 - [ ] `repo add`, `repo rm` and `repo ls` on the control side, and `creds audit`, which
       compares the inventory with `gh repo deploy-key list` on every repository it
       knows: pending revocations retried, unclaimed keys reported, `--fix` deletes them.
+- [ ] Split the rig key in two. Today one pair, `secrets/gw_ed25519`, is both the control
+      side's login to every VM (desk as `jsw`, backends as `dev`) and gw's key to the
+      backends (`/home/gw/.ssh/vm_ed25519`). On the Mac rig desk's `jsw` account authorizes
+      that public key, so the client sandbox user holds a key that also logs in as the
+      sudo-capable host user on desk: a sandbox escape in the rehearsal model, found
+      8 November while explaining `client-host new`. Not an issue on the Linux laptop,
+      whose own account never authorizes the rig key. Fix: a control key (the Mac or the
+      laptop into desk and the backends) and a sandbox key (gw into the backends only);
+      backends authorize both in their cloud-init, desk authorizes only the control key,
+      `host install` installs only the sandbox key, and `client-host new` pushes only the
+      sandbox pair to desk's secrets directory. The inventory records both pairs.
 - [ ] Host key pinning: `new` takes the VM's SSH host public key through the driver
       (Incus can read it from the guest; UTM's serial console carries cloud-init's host
       key print) before the first SSH connection, then hands it to `connect add`; never
