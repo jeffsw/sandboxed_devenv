@@ -269,8 +269,8 @@ def client_connect(user_config: config.UserConfig, runner: common.Runner, argume
         client.tool(arguments, sudo=True)
         retval = True
     except RemoteError as error:
-        print(f"{command}: on the client host ({client.target}): {error}", file=sys.stderr)
-        print(f"{command}: run there by hand: sudo sandboxed-devenv {' '.join(arguments[:3])} ...", file=sys.stderr)
+        print(common.warning(f"{command}: on the client host ({client.target}): {error}"), file=sys.stderr)
+        print(common.warning(f"{command}: run there by hand: sudo sandboxed-devenv {' '.join(arguments[:3])} ..."), file=sys.stderr)
         retval = False
     return retval
 
@@ -284,8 +284,8 @@ def print_repositories(record: ProjectRecord) -> None:
             unregistered.append(repository)
     if not unregistered:
         return
-    print(f"{record.project}: {len(unregistered)} deploy key(s) not registered; `sandboxed-devenv repo add {record.project} "
-          "OWNER/REPO` retries each, or by hand:")
+    print(common.warning(f"{record.project}: {len(unregistered)} deploy key(s) not registered; `sandboxed-devenv repo add "
+                         f"{record.project} OWNER/REPO` retries each, or by hand:"))
     for repository in unregistered:
         owner, repo = repository.name.split("/", 1)
         key_file = f"/home/dev/.ssh/deploy_{owner}_{repo}.pub"
@@ -322,7 +322,7 @@ def stop_vm(driver: control_driver.Driver, vm: str, command: str, force: bool = 
         try:
             control_driver.wait_for_state(driver, vm, control_driver.STOPPED, STOP_TIMEOUT)
         except DriverError:
-            print(f"{command}: {vm} did not stop within {STOP_TIMEOUT} s; forcing it", flush=True)
+            print(common.warning(f"{command}: {vm} did not stop within {STOP_TIMEOUT} s; forcing it"), flush=True)
             driver.stop(vm, force=True)
             control_driver.wait_for_state(driver, vm, control_driver.STOPPED, FORCE_STOP_TIMEOUT)
 
@@ -625,8 +625,9 @@ def rm(args) -> int:
     if pending:
         record.removed = record.removed or control_inventory.now()
         control_inventory.save(record)
-        print(f"{command}: {record.project}: {record.vm_name} deleted and the connection removed, but {len(pending)} deploy "
-              f"key revocation(s) failed; the inventory record stays until `sandboxed-devenv creds audit` gets them through")
+        print(common.warning(f"{command}: {record.project}: {record.vm_name} deleted and the connection removed, but "
+                             f"{len(pending)} deploy key revocation(s) failed; the inventory record stays until "
+                             "`sandboxed-devenv creds audit` gets them through"))
         retval = 1
     else:
         control_inventory.delete(record.project)

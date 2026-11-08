@@ -1,0 +1,25 @@
+{
+  "_comment": "sandboxed-devenv: what the canary reports on a healthy client sandbox and backend (PLAN.md M4). A key is a probe name, or a prefix ending in *; the value lists the statuses allowed. Any FAIL outside these is a mismatch too. The client role expects a GNOME session in which `client start` has run.",
+  "client": {
+    "read *": ["PASS"],
+    "agent*": ["PASS"],
+    "ssh client config": ["PASS"],
+    "ssh to github.com": ["PASS"],
+    "egress allowed github.com:443": ["PASS"],
+    "X11*": ["PASS", "INFO"],
+    "wayland": ["PASS"],
+    "real user's runtime dir": ["PASS", "INFO"],
+    "dbus session (real user)": ["PASS"],
+    "sandboxed-devenv command": ["PASS"]
+  },
+  "backend": {
+    "real user's secrets": ["INFO"],
+    "agent*": ["PASS"],
+    "ssh client config": ["PASS"],
+    "ssh to github.com": ["INFO"],
+    "egress allowed github.com:443": ["PASS"],
+    "X11*": ["PASS"],
+    "wayland": ["PASS"],
+    "sandboxed-devenv command": ["PASS"]
+  }
+}

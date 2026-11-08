@@ -98,3 +98,13 @@ def test_a_kept_file_is_written_once_and_then_left_alone(tmp_path, monkeypatch):
     assert [result.status for result in second] == [steps.UNCHANGED]
     assert "kept" in second[0].detail
     assert (tmp_path / "kept.xml").read_text() == "<edited/>"
+
+
+def test_host_check_dry_run_passes_json_and_expect_to_the_canary(capsys, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    assert cli.main(["--dry-run", "host", "check", "--json", "--expect"]) == 0
+    out = capsys.readouterr().out
+    assert "canary --role client --json --expect" in out
+    assert cli.main(["--dry-run", "host", "check", "--expect", "/tmp/golden.json"]) == 0
+    assert "--expect /tmp/golden.json" in capsys.readouterr().out

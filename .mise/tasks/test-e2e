@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="sandboxed-devenv test end-to-end: the three roles on real VMs on this machine (the Mac rig or the laptop); never in GitHub CI; extra args after --, e.g. -- --keep"
+#MISE depends=["sync"]
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT"
+sandboxed-devenv test end-to-end "$@"

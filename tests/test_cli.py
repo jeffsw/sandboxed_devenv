@@ -118,12 +118,6 @@ def test_group_without_subcommand_is_a_usage_error():
     assert raised.value.code == 2
 
 
-def test_stub_exits_1_and_names_its_milestone(capsys):
-    status = cli.main(["test", "host"])
-    assert status == 1
-    assert "M4" in capsys.readouterr().err
-
-
 def test_doctor_runs(capsys):
     status = cli.main(["doctor"])
     assert status == 0

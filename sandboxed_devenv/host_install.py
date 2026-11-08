@@ -68,6 +68,9 @@ def register(subparsers):
     install.set_defaults(handler=cmd_install)
 
     check = host.add_parser("check", help="run the canary in the client role as gw and print the summary")
+    check.add_argument("--json", action="store_true", help="the canary's JSON lines, for the test harness")
+    check.add_argument("--expect", nargs="?", const="<packaged>", metavar="FILE",
+                       help="compare with the golden result for the client role (the package's, or FILE)")
     check.set_defaults(handler=cmd_check)
 
 
@@ -356,13 +359,20 @@ def cmd_check(args) -> int:
         retval = 1
         return retval
     runtime_dir, sock, uid = environment
-    command = host_client.sudo_command(sock, uid, [common.command_path(), "canary", "--role", "client"], xauthority=True)
+    canary_arguments = [common.command_path(), "canary", "--role", "client"]
+    if args.json:
+        canary_arguments.append("--json")
+    if args.expect:
+        canary_arguments.append("--expect")
+        if args.expect != "<packaged>":
+            canary_arguments.append(args.expect)
+    command = host_client.sudo_command(sock, uid, canary_arguments, xauthority=True)
     if args.dry_run:
         print(f"would run: {shlex.join(command)}")
         retval = 0
         return retval
     print("host check: the canary as gw; its Wayland and runtime-dir probes expect `client start` "
-          "to have lent the socket in this session", flush=True)
+          "to have lent the socket in this session", file=sys.stderr if args.json else sys.stdout, flush=True)
     completed = subprocess.run(command)
     retval = completed.returncode
     return retval

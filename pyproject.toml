@@ -41,8 +41,8 @@ packages = ["sandboxed_devenv"]
 
 [tool.setuptools.package-data]
 # files/: everything a role receives on disk plus the cloud-init documents (PLAN.md, "Files and
-# templates"); versions.yaml: every pinned version.
-sandboxed_devenv = ["files/**/*", "files/**/.*", "*.yaml"]
+# templates"); versions.yaml and policy.yaml; canary_expected.json, the canary's golden results.
+sandboxed_devenv = ["files/**/*", "files/**/.*", "*.yaml", "*.json"]
 
 [tool.pytest.ini_options]
 addopts = ["--import-mode=importlib"]

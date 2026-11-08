@@ -15,6 +15,9 @@ Claude, for humans and in GitHub CI. Tool versions are pinned in `.mise.toml`.
 - `mise run lint-python`: ruff plus a syntax check of every Python file.
 - `mise run render`: `sandboxed-devenv render`, every artifact under `build/` (files/ for both
   roles, the cloud-init documents, the wheel), which the other checks read.
+- `mise run test-e2e`: `sandboxed-devenv test end-to-end` on this machine's real VMs (the Mac
+  rig or the laptop): a throwaway project through all three roles, then removed. Minutes, and
+  never in GitHub CI; run it after a change to the drivers, the seeds or the remote calls.
 
 The Linux-only validators (`cloud-init schema`, `apparmor_parser`, `nft`) are skipped on macOS
 with a notice; CI runs on Linux and requires them.
@@ -45,10 +48,10 @@ Don't ask which verification to run.
 
 ## Documents
 
-`PLAN.md`, `ide_sandboxing_summary.md` and `README.md` follow the house rules that
-`mise run lint-doc` checks on the summary: no em-dashes (use commas, colons or parentheses),
-every table row with the header's column count, prose wrapped at about 90 columns. The summary
-keeps a revision history at the top; bump it when its content changes.
+`PLAN.md`, `ide_sandboxing_summary.md`, `README.md` and `docs/*.md` follow the house rules
+that `mise run lint-doc` checks on all of them: no em-dashes (use commas, colons or
+parentheses), every table row with the header's column count, prose wrapped at about 90
+columns. The summary keeps a revision history at the top; bump it when its content changes.
 
 ## Reviewing pull requests or branches
 

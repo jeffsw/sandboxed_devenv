@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-#MISE description="summary doc rules: no em-dashes, consistent table columns, Mermaid blocks extracted for lint-mermaid"
+#MISE description="doc rules on the summary, PLAN.md, README.md and docs/: no em-dashes, consistent table columns, Mermaid blocks extracted for lint-mermaid"
 """
-Checks ide_sandboxing_summary.md against the house rules and writes each Mermaid
-block to build/mermaid/<n>.mmd for the lint-mermaid task. Standard library only.
+Checks the Markdown documents against the house rules and writes each Mermaid block
+to build/mermaid/<n>.mmd for the lint-mermaid task. Standard library only.
 """
 import os
 import pathlib
@@ -12,27 +12,30 @@ import sys
 
 def main() -> int:
     os.chdir(os.environ['MISE_PROJECT_ROOT'])
-    doc = pathlib.Path('ide_sandboxing_summary.md')
-    text = doc.read_text()
+    docs = [pathlib.Path('ide_sandboxing_summary.md'), pathlib.Path('PLAN.md'), pathlib.Path('README.md')]
+    docs += sorted(pathlib.Path('docs').glob('*.md')) if pathlib.Path('docs').is_dir() else []
     problems = []
+    blocks = []
+    for doc in docs:
+        text = doc.read_text()
+        for number, line in enumerate(text.splitlines(), start=1):
+            if '—' in line:
+                problems.append(f'{doc}:{number}: em-dash; the docs use commas, colons or parentheses instead')
 
-    for number, line in enumerate(text.splitlines(), start=1):
-        if '—' in line:
-            problems.append(f'{doc}:{number}: em-dash; the doc uses commas, colons or parentheses instead')
+        # Every row of a table must have the same number of cells as its header. A pipe inside
+        # backticks is code, not a cell boundary.
+        width = None
+        for number, line in enumerate(text.splitlines(), start=1):
+            if line.startswith('|'):
+                cells = re.sub(r'`[^`]*`', '', line).count('|')
+                if width is None:
+                    width = cells
+                elif cells != width:
+                    problems.append(f'{doc}:{number}: table row has {cells} pipes, header has {width}')
+            else:
+                width = None
+        blocks += re.findall(r'```mermaid\n(.*?)```', text, re.S)
 
-    # Every row of a table must have the same number of cells as its header.
-    width = None
-    for number, line in enumerate(text.splitlines(), start=1):
-        if line.startswith('|'):
-            cells = line.count('|')
-            if width is None:
-                width = cells
-            elif cells != width:
-                problems.append(f'{doc}:{number}: table row has {cells} pipes, header has {width}')
-        else:
-            width = None
-
-    blocks = re.findall(r'```mermaid\n(.*?)```', text, re.S)
     out = pathlib.Path('build/mermaid')
     out.mkdir(parents=True, exist_ok=True)
     for old in out.glob('*'):
@@ -42,7 +45,7 @@ def main() -> int:
 
     for problem in problems:
         print(problem)
-    print(f'lint-doc: {len(problems)} problems, {len(blocks)} Mermaid blocks written to {out}')
+    print(f'lint-doc: {len(problems)} problems in {len(docs)} documents, {len(blocks)} Mermaid blocks written to {out}')
     retval = 1 if problems else 0
     return retval
 

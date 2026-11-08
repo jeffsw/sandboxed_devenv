@@ -60,6 +60,10 @@ class ImageRecord(pydantic.BaseModel):
     driver: str
     architecture: str
     package_version: str
+    # Of the package's source tree as installed here: a code change rebuilds the image even
+    # when the version did not move (found 8 November 2026, when a backend ran a canary older
+    # than the control side's).
+    package_sha256: str = ""
     ide_backend_version: str
     ubuntu_release: str
     ubuntu_image_serial: str
@@ -79,6 +83,7 @@ class ImageRecord(pydantic.BaseModel):
         retdict = {
             "architecture": self.architecture,
             "package_version": self.package_version,
+            "package_sha256": self.package_sha256,
             "ide_backend_version": self.ide_backend_version,
             "ubuntu_release": self.ubuntu_release,
             "ubuntu_image_serial": self.ubuntu_image_serial,
@@ -163,6 +168,22 @@ def list_images() -> list[ImageRecord]:
     return retlist
 
 
+def package_digest() -> str:
+    """A SHA-256 over the package's source tree as installed here (every file under the package
+    directory but caches, by relative path and content), so a rebuild decision sees code changes
+    that a version bump did not record."""
+    root = pathlib.Path(__file__).resolve().parent
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or "__pycache__" in path.parts or path.suffix in (".pyc", ".pyo"):
+            continue
+        digest.update(str(path.relative_to(root)).encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+    retval = digest.hexdigest()
+    return retval
+
+
 def wanted_record(versions: config.Versions, user_config: config.UserConfig, architecture: str,
                   user_data: str, driver_name: str) -> ImageRecord:
     retval = ImageRecord(
@@ -170,6 +191,7 @@ def wanted_record(versions: config.Versions, user_config: config.UserConfig, arc
         driver=driver_name,
         architecture=architecture,
         package_version=common.package_version(),
+        package_sha256=package_digest(),
         ide_backend_version=versions.ide_backend.version,
         ubuntu_release=versions.ubuntu.release,
         ubuntu_image_serial=versions.ubuntu.image_serial,
@@ -192,6 +214,8 @@ def rebuild_reasons(current: ImageRecord | None, wanted: ImageRecord) -> list[st
             if have != value:
                 if key == "cloudinit_sha256":
                     retlist.append("the image cloud-init changed")
+                elif key == "package_sha256":
+                    retlist.append("the package code changed")
                 else:
                     retlist.append(f"{key} {have} -> {value}")
     return retlist
@@ -350,7 +374,7 @@ def remove_leftover(driver, vm: str) -> None:
     """A build VM from an earlier failed run: stop it if needed and delete it."""
     if driver.exists(vm):
         state = driver.state(vm)
-        print(f"{COMMAND}: removing the leftover build VM {vm} ({state})", flush=True)
+        print(common.warning(f"{COMMAND}: removing the leftover build VM {vm} ({state})"), flush=True)
         if state != control_driver.STOPPED:
             try:
                 driver.stop(vm, force=False)
@@ -455,7 +479,7 @@ def build(args) -> int:
             try:
                 control_driver.wait_for_state(driver, vm, control_driver.STOPPED, POWEROFF_TIMEOUT)
             except DriverError:
-                print(f"{COMMAND}: power off: {vm} did not stop by itself; forcing it", flush=True)
+                print(common.warning(f"{COMMAND}: power off: {vm} did not stop by itself; forcing it"), flush=True)
                 driver.stop(vm, force=True)
                 control_driver.wait_for_state(driver, vm, control_driver.STOPPED, LEFTOVER_STOP_TIMEOUT)
     except (RemoteError, DriverError) as error:

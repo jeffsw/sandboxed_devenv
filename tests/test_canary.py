@@ -51,3 +51,53 @@ def test_text_report(capsys):
     canary.report("PASS", "a probe", "fine")
     assert capsys.readouterr().out == "PASS a probe: fine\n"
     canary.RESULTS.clear()
+
+
+def test_expectations_file_covers_both_roles_with_known_statuses():
+    for role in ("client", "backend"):
+        expected = canary.expected_for(role)
+        assert expected, role
+        for pattern, allowed in expected.items():
+            assert allowed and set(allowed) <= set(canary.STATUSES), (role, pattern, allowed)
+        assert expected["sandboxed-devenv command"] == ["PASS"]
+    assert canary.expected_for("client")["wayland"] == ["PASS"]
+    assert canary.expected_for("backend")["ssh to github.com"] == ["INFO"]
+
+
+def test_compare_reports_missing_wrong_and_uncovered_failures(tmp_path):
+    results = [("PASS", "wayland", "answers"), ("INFO", "X11 /tmp/.X11-unix/X9", "own"), ("PASS", "X11 /tmp/.X11-unix/X0", "refused"),
+               ("FAIL", "agent /run/x", "lists 1 key"), ("FAIL", "dbus session (real user)", "usable")]
+    expected = {"wayland": ["PASS"], "X11*": ["PASS", "INFO"], "agent*": ["PASS"], "sandboxed-devenv command": ["PASS"]}
+    mismatches = canary.compare(results, expected)
+    assert mismatches == [
+        "agent /run/x: FAIL, expected PASS (lists 1 key)",
+        "sandboxed-devenv command: no such probe ran; expected PASS",
+        "dbus session (real user): FAIL (usable)",
+    ]
+    assert canary.compare([("PASS", "wayland", "")], {"wayland": "PASS"}) == []
+    golden = tmp_path / "golden.json"
+    golden.write_text(json.dumps({"wayland": "PASS", "agent*": ["PASS", "INFO"]}))
+    loaded = canary.expected_for("client", str(golden))
+    assert loaded == {"wayland": ["PASS"], "agent*": ["PASS", "INFO"]}
+
+
+def test_json_lines_parse_back_into_a_report():
+    text = "\n".join([
+        json.dumps({"canary": {"role": "backend", "user": "dev", "host_home": None}}),
+        json.dumps({"status": "PASS", "name": "wayland", "detail": "no socket"}),
+        "host check: a notice that is not JSON",
+        json.dumps({"expect": {"source": "x", "mismatches": ["wayland: FAIL"]}}),
+        json.dumps({"summary": {"pass": 1, "fail": 0, "info": 0}}),
+    ])
+    report = canary.parse_json_lines(text)
+    assert report["canary"]["role"] == "backend"
+    assert report["probes"] == [("PASS", "wayland", "no socket")]
+    assert report["mismatches"] == ["wayland: FAIL"]
+    assert report["summary"]["pass"] == 1
+    assert report["other"] == ["host check: a notice that is not JSON"]
+    assert canary.parse_json_lines("")["summary"] is None
+
+
+def test_expect_flag_is_offered_everywhere():
+    completed = subprocess.run([sys.executable, "-I", str(CANARY_FILE), "--help"], capture_output=True, text=True)
+    assert "--expect" in completed.stdout
