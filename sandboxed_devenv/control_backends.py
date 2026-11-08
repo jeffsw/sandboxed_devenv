@@ -5,15 +5,18 @@ takes a VM name (PLAN.md, "Projects and repositories"). `new` launches the backe
 image: the driver imports the image (an APFS clone under UTM, instant and block-sharing) with a
 seed rendered from the project cloud-init (hostname, the rig key, project.yaml with the
 repositories, git identity and Claude token, a static address from the pool), waits for SSH and
-for `backend status` to report ready, pins the host keys on the client host with `connect add`
-and records everything in the inventory. The deploy keys the backend minted are printed for
-registration by hand until M3 automates it.
+for `backend status` to report ready, pins the host keys on the client host with `connect add`,
+registers each repository's minted deploy key on GitHub and clones it (control_creds.py), and
+records everything in the inventory. When GitHub cannot be reached the keys stay unregistered and
+the commands to finish by hand are printed.
 
 `clone` stops the source backend for a consistent copy of its disk, launches the copy as a
 disposable project with its own seed (a new instance id, so cloud-init treats the first boot as
 new: hostname, address, host keys and project.yaml all change) and gives every repository a
-fresh key pair. `rm` removes the connection on the client host and deletes the VM; M3 adds the
-revocations. `resources` reads the VM's own configuration and changes it with the backend
+fresh key pair, registered under the new project's name. `rm` revokes every deploy key on GitHub
+first, removes the connection on the client host and deletes the VM; a revocation that fails
+keeps the inventory record, marked removed, for `creds audit` to retry. `resources` reads the
+VM's own configuration and changes it with the backend
 stopped where the driver needs that. `ssh` and `serial-console` exec into the VM.
 
 Slow steps say what they do and why before they start, and how long they took (PLAN.md,
@@ -41,7 +44,7 @@ from sandboxed_devenv import (
     render,
 )
 from sandboxed_devenv.control_driver import DriverError, VmSpec
-from sandboxed_devenv.control_inventory import InventoryError, ProjectRecord, RepositoryRecord
+from sandboxed_devenv.control_inventory import UNREGISTERED, InventoryError, ProjectRecord, RepositoryRecord
 from sandboxed_devenv.remote import RemoteError
 from sandboxed_devenv.render import RenderError
 
@@ -109,7 +112,7 @@ def register(subparsers):
 
     rm = subparsers.add_parser(
         "rm",
-        help="remove the connection on the client host and delete the backend; M3 adds the revocations (control)",
+        help="revoke the backend's deploy keys on GitHub, remove the connection on the client host, delete the VM (control)",
     )
     _project_argument(rm)
     _yes_argument(rm, "delete")
@@ -271,16 +274,16 @@ def client_connect(user_config: config.UserConfig, runner: common.Runner, argume
 
 
 def print_repositories(record: ProjectRecord) -> None:
-    """The deploy keys the backend minted and the commands that register and clone each one, by
-    hand until M3: fetch the public key from the backend, `gh repo deploy-key add`, then
-    `backend repo add` inside the backend, which clones."""
+    """For deploy keys that could not be registered: the commands that register and clone each
+    one by hand, or `repo add`, which retries the whole step."""
     unregistered = []
     for repository in record.repos:
-        if repository.state == control_inventory.UNREGISTERED:
+        if repository.state == UNREGISTERED:
             unregistered.append(repository)
     if not unregistered:
         return
-    print(f"{record.project}: {len(unregistered)} deploy key(s) to register by hand (M3 automates this):")
+    print(f"{record.project}: {len(unregistered)} deploy key(s) not registered; `sandboxed-devenv repo add {record.project} "
+          "OWNER/REPO` retries each, or by hand:")
     for repository in unregistered:
         owner, repo = repository.name.split("/", 1)
         key_file = f"/home/dev/.ssh/deploy_{owner}_{repo}.pub"
@@ -387,6 +390,8 @@ def new_plan_lines(record: ProjectRecord, project: config.ProjectConfig, image: 
         f"would run `connect add {record.project} {record.address} HOSTKEY...` on the client host ({user_config.client_host})",
         f"would record it in {control_inventory.record_path(record.project)}",
     ]
+    if project.repositories:
+        retlist.append("would register each repository's minted deploy key on GitHub (gh api) and clone it in the backend")
     return retlist
 
 
@@ -419,6 +424,7 @@ def new(args) -> int:
             print(line)
         retval = 0
         return retval
+    github = github_for(args.repo, runner)
     started = time.monotonic()
     print(f"{command}: launching {vm} for {args.project} at {address} with {cpus} CPUs and {memory_gib} GiB "
           f"from {image.name}", flush=True)
@@ -434,12 +440,30 @@ def new(args) -> int:
         retval = 1
         return retval
     _ = public_key
+    control_creds.record_token(record, project.claude_oauth_token)
+    control_inventory.save(record)
+    left = 0
+    if record.repos:
+        backend = remote.backend(record.address, record.vm_name, runner)
+        left = control_creds.register_and_clone(github, backend, record, command)
     print(f"{command}: {args.project} ready: {vm} at {address}, {len(record.repos)} repositories; "
           f"total {common.format_duration(time.monotonic() - started)}")
     print(f"{command}: in Gateway on the client host, connect to dev@{address} with /home/gw/.ssh/vm_ed25519 and open "
           f"/home/dev/proj/{args.project}")
-    print_repositories(record)
-    retval = 0
+    if left:
+        print_repositories(record)
+    retval = 1 if left else 0
+    return retval
+
+
+def github_for(repositories: list, runner: common.Runner) -> control_creds.GitHub:
+    """The GitHub client, checked before a VM is made when repositories are to be registered, so
+    a missing or logged-out `gh` fails early instead of leaving keys unregistered."""
+    retval = control_creds.GitHub(runner)
+    if repositories:
+        control_creds.require_gh()
+        if not retval.authenticated():
+            raise control_creds.GitHubError("`gh` is not logged in to GitHub; run `gh auth login` first")
     return retval
 
 
@@ -464,7 +488,7 @@ def ls(args) -> int:
     for record in records:
         rows.append({
             "project": record.project,
-            "state": states.get(record.vm_name, "missing"),
+            "state": "removed" if record.removed else states.get(record.vm_name, "missing"),
             "address": record.address,
             "cpus": record.cpus,
             "memory_gib": record.memory_gib,
@@ -475,6 +499,7 @@ def ls(args) -> int:
             "disposable": record.disposable,
             "cloned_from": record.cloned_from,
             "vm_name": record.vm_name,
+            "pending_revocations": len([r for r in record.repos if r.state == control_inventory.PENDING_REVOKE]),
         })
     if args.json:
         print(json.dumps(rows, indent=2))
@@ -486,6 +511,8 @@ def ls(args) -> int:
             notes = []
             if row["disposable"]:
                 notes.append("disposable" + (f" from {row['cloned_from']}" if row["cloned_from"] else ""))
+            if row["pending_revocations"]:
+                notes.append(f"{row['pending_revocations']} pending revocation(s); `creds audit` retries")
             created = row["created"][:16].replace("T", " ") if row["created"] else "?"
             table.append((row["project"], row["state"], row["address"] or "?", str(row["cpus"]), f"{row['memory_gib']} GiB",
                           str(len(row["repos"])), row["package_version"], created, ", ".join(notes)))
@@ -560,7 +587,10 @@ def rm(args) -> int:
     runner, user_config, driver = setup(args)
     record = control_inventory.require(args.project)
     state = vm_state(driver, record.vm_name)
+    keyed = [r for r in record.repos if r.github_key_id is not None or r.public_key]
     if args.dry_run:
+        if keyed:
+            print(f"would revoke the deploy keys of {', '.join(r.name for r in keyed)} on GitHub")
         print(f"would run `connect rm {record.project}` on the client host ({user_config.client_host})")
         if state != "missing":
             print(f"would stop {record.vm_name} ({state}) if needed and delete it")
@@ -571,18 +601,35 @@ def rm(args) -> int:
                    args.yes):
         retval = 1
         return retval
+    pending = []
+    if keyed and not record.removed:
+        try:
+            control_creds.require_gh()
+            pending = control_creds.revoke_all(control_creds.GitHub(runner), record, command)
+        except control_creds.GitHubError as error:
+            print(f"{command}: {error}; the deploy keys stay pending-revoke for `creds audit`", file=sys.stderr)
+            for repository in keyed:
+                repository.state = control_inventory.PENDING_REVOKE
+            pending = keyed
+    elif record.removed:
+        pending = [r for r in record.repos if r.state == control_inventory.PENDING_REVOKE]
     client_connect(user_config, runner, host_connect.rm_arguments(record.project), command)
     if state != "missing":
         if state != control_driver.STOPPED:
             stop_vm(driver, record.vm_name, command)
         driver.delete(record.vm_name)
     remote.forget_host_keys(record.vm_name)
-    control_inventory.delete(record.project)
-    print(f"{command}: {record.project} removed ({record.vm_name} deleted, connection removed, inventory record gone)")
-    registered = [repository.name for repository in record.repos if repository.state != control_inventory.UNREGISTERED]
-    if registered:
-        print(f"{command}: deploy keys on GitHub for {', '.join(registered)} are not revoked yet; M3 does that")
-    retval = 0
+    if pending:
+        record.removed = record.removed or control_inventory.now()
+        control_inventory.save(record)
+        print(f"{command}: {record.project}: {record.vm_name} deleted and the connection removed, but {len(pending)} deploy "
+              f"key revocation(s) failed; the inventory record stays until `sandboxed-devenv creds audit` gets them through")
+        retval = 1
+    else:
+        control_inventory.delete(record.project)
+        print(f"{command}: {record.project} removed ({record.vm_name} deleted, deploy keys revoked, connection removed, "
+              "inventory record gone)")
+        retval = 0
     return retval
 
 
@@ -624,9 +671,11 @@ def clone(args) -> int:
         print(f"would copy {source.vm_name}'s disk out of its bundle (an APFS clone) and launch {new_vm} from it")
         for line in new_plan_lines(record, project, image, user_config)[1:]:
             print(line)
-        print("would give every repository in the copy a fresh key pair (`backend repo rekey`)")
+        print("would give every repository in the copy a fresh key pair (`backend repo rekey`), registered under "
+              f"{args.new_project}'s name")
         retval = 0
         return retval
+    github = github_for(project.repositories, runner)
     was_running = state not in (control_driver.STOPPED, "missing")
     if state == "missing":
         raise DriverError(f"{source.vm_name} is in the inventory but not in the driver")
@@ -664,14 +713,19 @@ def clone(args) -> int:
     for repository in project.repositories:
         result = backend.tool(["backend", "repo", "rekey", repository.name], parse_json=True, json_flag=False)
         rekeyed.append(result)
+    control_creds.record_token(record, project.claude_oauth_token)
+    left = 0
     if rekeyed:
         status = backend.status()
         record.repos = repository_records(status, project.repositories)
         control_inventory.save(record)
+        left = control_creds.register_and_clone(github, backend, record, command)
+    control_inventory.save(record)
     print(f"{command}: {args.new_project} ready: {new_vm} at {address}, a disposable copy of {args.project} with "
           f"{len(rekeyed)} fresh deploy keys; total {common.format_duration(time.monotonic() - started)}")
-    print_repositories(record)
-    retval = 0
+    if left:
+        print_repositories(record)
+    retval = 1 if left else 0
     return retval
 
 
