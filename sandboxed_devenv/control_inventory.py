@@ -2,8 +2,10 @@
 
 A project's record names its backend (the VM, the driver, the base image and package version
 it was launched from, its address and resources), the repositories with their key fingerprints
-and GitHub ids, and every other credential with how it is revoked (PLAN.md, M3). M2 writes the
-backend side and the repositories as `new` finds them; M3 fills in registration and revocation.
+and GitHub ids, and every other credential with how it is revoked (PLAN.md, M3). `new` writes the
+backend side and the repositories as the backend minted them; control_creds.py fills in the
+registration, revocation and rotation, and keeps a record whose backend is gone while a
+revocation is still pending.
 Every control command that needs a backend finds it here by the project's name; no command
 takes a VM name.
 """
@@ -44,8 +46,10 @@ class RepositoryRecord(pydantic.BaseModel):
     fingerprint: str | None = None
     public_key: str | None = None
     github_key_id: int | None = None
+    title: str | None = None
     state: typing.Literal["unregistered", "active", "pending-revoke"] = UNREGISTERED
     created: datetime.datetime | None = None
+    registered: datetime.datetime | None = None
 
 
 class CredentialRecord(pydantic.BaseModel):
@@ -79,6 +83,8 @@ class ProjectRecord(pydantic.BaseModel):
     disposable: bool = False
     cloned_from: str | None = None
     created: datetime.datetime | None = None
+    # Set when the backend was deleted but a revocation failed: the record stays for `creds audit`.
+    removed: datetime.datetime | None = None
     repos: list[RepositoryRecord] = pydantic.Field(default_factory=list)
     credentials: list[CredentialRecord] = pydantic.Field(default_factory=list)
 
