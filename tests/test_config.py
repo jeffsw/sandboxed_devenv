@@ -76,3 +76,51 @@ def test_versions_file_is_the_only_place_with_version_strings():
         assert versions.ide_backend.version not in text, f"{path.name} carries the IDE version"
     raw = yaml.safe_load(config.versions_file().read_text())
     assert set(raw) == {"gateway", "ide_backend", "client", "ubuntu"}
+
+
+def test_secrets_may_be_values_or_1password_references(tmp_path, monkeypatch):
+    monkeypatch.setenv("SANDBOXED_DEVENV_HOME", str(tmp_path))
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    assert config.secret_source("claude_oauth_token") == ("absent", None)
+    assert config.read_secret("claude_oauth_token") is None
+    (secrets / "claude_oauth_token").write_text("plain-value\n")
+    assert config.secret_source("claude_oauth_token") == ("file", None)
+    assert config.read_secret("claude_oauth_token") == "plain-value"
+    (secrets / "claude_oauth_token").write_text("op://Private/Claude Code/credential\n")
+    assert config.secret_source("claude_oauth_token") == ("1password", "op://Private/Claude Code/credential")
+    asked = []
+
+    def resolver(reference):
+        asked.append(reference)
+        retval = "resolved-value"
+        return retval
+
+    assert config.read_secret("claude_oauth_token", resolver) == "resolved-value"
+    assert asked == ["op://Private/Claude Code/credential"]
+    monkeypatch.setattr(config.shutil, "which", lambda name: None)
+    with pytest.raises(config.SecretError, match="1Password CLI"):
+        config.read_secret("claude_oauth_token")
+    monkeypatch.setattr(config.shutil, "which", lambda name: "/opt/homebrew/bin/op")
+
+    def failing(command, **kwargs):
+        import subprocess
+        retval = subprocess.CompletedProcess(command, 1, "", "[ERROR] not signed in")
+        return retval
+
+    monkeypatch.setattr(config.subprocess, "run", failing)
+    with pytest.raises(config.SecretError, match="not signed in"):
+        config.read_secret("claude_oauth_token")
+
+
+def test_backend_defaults_carry_the_token_policy(tmp_path, monkeypatch):
+    monkeypatch.setenv("SANDBOXED_DEVENV_HOME", str(tmp_path))
+    assert config.UserConfig().backend.claude_token == "shared"
+    assert config.UserConfig().backend.disposable_claude_token is False
+    (tmp_path / "config.yaml").write_text("backend:\n  claude_token: per-project\n  disposable_claude_token: true\n")
+    user_config = config.load_user_config()
+    assert user_config.backend.claude_token == "per-project"
+    assert user_config.backend.disposable_claude_token is True
+    (tmp_path / "config.yaml").write_text("backend:\n  claude_token: sometimes\n")
+    with pytest.raises(Exception):
+        config.load_user_config()

@@ -9,10 +9,12 @@ them as root on the client host, where `new` runs it through remote.py:
 - the backend's host keys in ``/home/gw/.ssh/known_hosts``, pinned by address, so neither gw
   nor Gateway meets a trust-on-first-use prompt (M2 takes the keys from `backend status` after
   the control side's own first connection; M3 moves the pinning before any connection);
-- an entry in Gateway's ``sshConfigs.xml``, written only while Gateway is not running: Gateway
-  rewrites that file from memory when it exits, so an edit made under a running Gateway is
-  lost. With Gateway running the command says what to do instead and still succeeds, since
-  the connection can also be added in Gateway's window.
+- an entry in Gateway's ``sshConfigs.xml``. Gateway reloads the file when its window regains
+  focus and keeps what it read when it exits (tried on desk, 8 November 2026: an entry written
+  under a running Gateway appeared in its dialog after a click on the window, opened a session,
+  and was still in the file after Gateway quit), so the entry is written whether or not Gateway
+  runs. With Gateway running the command says so in bold yellow, since the user has something
+  to do: a window that already has focus must lose and regain it for the reload.
 
 `connect rm` undoes the three; `connect ls` lists what is there. Nothing here touches routes:
 the desk cloud-init carries routes to both halves of the VM subnet (PLAN.md M2), and the Linux
@@ -30,7 +32,7 @@ import uuid
 import xml.etree.ElementTree as ElementTree
 
 from sandboxed_devenv import common, host_client, render, steps
-from sandboxed_devenv.steps import UNCHANGED, WOULD_CHANGE, Outcome, read_text, remove_file, sync_file
+from sandboxed_devenv.steps import UNCHANGED, Outcome, read_text, remove_file, sync_file
 
 COMMAND = "connect"
 STANZA_HEADER = "# sandboxed-devenv connect: project "
@@ -328,14 +330,10 @@ def cmd_add(args) -> int:
     ]
     if gateway_running(paths):
         print(common.warning(
-            f"{command}: Gateway is running as {paths.user}, and it rewrites {paths.ssh_configs.name} when it exits, "
-            f"so its entry is not written. Add the connection in Gateway's window (host {args.address}, user "
-            f"{BACKEND_USER}, key {paths.key_file}), or quit Gateway and run `sandboxed-devenv {command} ...` again."),
-            flush=True)
-        outcomes.append(Outcome(f"file {paths.ssh_configs}", UNCHANGED, "Gateway is running; entry not written"))
-    else:
-        content = ssh_configs_with(read_text(paths.ssh_configs), args.project, args.address, paths.gateway_branch)
-        outcomes.append(sync_file(paths.ssh_configs, content.encode(), paths.user, paths.group, 0o600, apply))
+            f"{command}: Gateway is running as {paths.user}; it reloads {paths.ssh_configs.name} when its window regains "
+            "focus: click another window, then Gateway's, and the connection is in its dialog. No restart needed."), flush=True)
+    content = ssh_configs_with(read_text(paths.ssh_configs), args.project, args.address, paths.gateway_branch)
+    outcomes.append(sync_file(paths.ssh_configs, content.encode(), paths.user, paths.group, 0o600, apply))
     retval = finish(command, outcomes, args.dry_run)
     return retval
 
@@ -364,13 +362,11 @@ def cmd_rm(args) -> int:
     text = read_text(paths.ssh_configs)
     if text and entry_id(args.project) in text:
         if gateway_running(paths):
-            target = parsed[1] if parsed else args.project
-            print(common.warning(f"{command}: Gateway is running as {paths.user}; remove the connection to {target} in "
-                                 "its window, or quit Gateway and run this again."), flush=True)
-            outcomes.append(Outcome(f"file {paths.ssh_configs}", WOULD_CHANGE, "Gateway is running; entry not removed"))
-        else:
-            content = ssh_configs_without(text, args.project, paths.gateway_branch)
-            outcomes.append(sync_file(paths.ssh_configs, content.encode(), paths.user, paths.group, 0o600, apply))
+            print(common.warning(
+                f"{command}: Gateway is running as {paths.user}; click another window, then Gateway's, and the connection "
+                "is gone from its dialog. No restart needed."), flush=True)
+        content = ssh_configs_without(text, args.project, paths.gateway_branch)
+        outcomes.append(sync_file(paths.ssh_configs, content.encode(), paths.user, paths.group, 0o600, apply))
     else:
         outcomes.append(Outcome(f"file {paths.ssh_configs}", UNCHANGED, "no entry"))
     retval = finish(command, outcomes, args.dry_run)

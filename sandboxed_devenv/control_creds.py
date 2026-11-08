@@ -54,7 +54,7 @@ CLAUDE_TOKEN_KIND = "claude-token"
 CLAUDE_SETTINGS_PATH = "/home/dev/.claude/settings.json"
 CLAUDE_TOKEN_REVOKE = ("claude.ai: Settings, Privacy, log out everywhere; then `claude setup-token` into the secrets "
                        "directory and `creds rotate PROJECT --claude-token`")
-ERRORS = (RemoteError, InventoryError, OSError)
+ERRORS = (RemoteError, InventoryError, config.SecretError, OSError)
 
 
 class GitHubError(RemoteError):
@@ -316,6 +316,30 @@ def revoke_all(github: GitHub, record: ProjectRecord, command: str) -> list[Repo
         if not revoked:
             retlist.append(repository)
     return retlist
+
+
+def claude_token(user_config: config.UserConfig, project: str, disposable: bool) -> tuple[str | None, str]:
+    """The Claude token a backend gets under the policy knob, and a line saying where it came
+    from or why there is none (PLAN.md M3)."""
+    policy = user_config.backend.claude_token
+    if disposable and not user_config.backend.disposable_claude_token:
+        retval = (None, "no Claude token: disposable backends get none (backend.disposable_claude_token in config.yaml)")
+    elif policy == "none":
+        retval = (None, "no Claude token: backend.claude_token is `none` in config.yaml")
+    elif policy == "per-project":
+        name = f"{config.CLAUDE_TOKEN_NAME}.{project}"
+        token = config.read_secret(name)
+        if token:
+            retval = (token, f"Claude token for this project from {config.secrets_dir() / name}")
+        else:
+            retval = (None, f"no Claude token: backend.claude_token is `per-project` and {config.secrets_dir() / name} is absent")
+    else:
+        token = config.read_secret(config.CLAUDE_TOKEN_NAME)
+        if token:
+            retval = (token, f"shared Claude token from {config.secrets_dir() / config.CLAUDE_TOKEN_NAME}")
+        else:
+            retval = (None, f"no Claude token: {config.secrets_dir() / config.CLAUDE_TOKEN_NAME} is absent; Claude Code asks to log in")
+    return retval
 
 
 def token_fingerprint(token: str) -> str:
@@ -654,9 +678,9 @@ def rotate_token(backend, record: ProjectRecord, command: str) -> None:
     """The Claude token from the secrets directory into the backend: project.yaml rewritten in
     place through `sudo tee` (the file keeps its root-only mode), then `backend prepare` renders
     dev's settings.json from it."""
-    token = config.read_secret(config.CLAUDE_TOKEN_NAME)
+    token, source = claude_token(config.load_user_config(), record.project, record.disposable)
     if not token:
-        raise InventoryError(f"no token at {config.secrets_dir() / config.CLAUDE_TOKEN_NAME}; `claude setup-token` makes one")
+        raise InventoryError(f"{source}; `claude setup-token` makes one")
     current = backend.run(["sudo", "cat", str(config.BACKEND_PROJECT_CONFIG)], capture=True).stdout or ""
     project = config.ProjectConfig(**(config.yaml.safe_load(current) or {})) if current.strip() else None
     if project is None:
@@ -667,7 +691,7 @@ def rotate_token(backend, record: ProjectRecord, command: str) -> None:
     backend.tool(["backend", "prepare", "--stage", "project"], sudo=True)
     record_token(record, token)
     control_inventory.save(record)
-    print(f"{command}: Claude token in {record.vm_name} replaced ({token_fingerprint(token)})", flush=True)
+    print(f"{command}: Claude token in {record.vm_name} replaced ({token_fingerprint(token)}); {source}", flush=True)
 
 
 def creds_rotate(args) -> int:

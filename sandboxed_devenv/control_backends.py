@@ -55,7 +55,7 @@ READY_TIMEOUT = 900
 STOP_TIMEOUT = 180
 FORCE_STOP_TIMEOUT = 60
 NEW_DIR_PREFIX = ".new-"
-ERRORS = (RemoteError, DriverError, RenderError, InventoryError, OSError)
+ERRORS = (RemoteError, DriverError, RenderError, InventoryError, config.SecretError, OSError)
 
 
 def _project_argument(parser: argparse.ArgumentParser, metavar: str = "PROJECT") -> None:
@@ -201,12 +201,12 @@ def base_image(user_config: config.UserConfig) -> control_images.ImageRecord:
     return retval
 
 
-def project_config(project: str, repositories: list[str], write: bool, identity: config.GitIdentity) -> config.ProjectConfig:
+def project_config(project: str, repositories: list[str], write: bool, identity: config.GitIdentity,
+                   token: str | None) -> config.ProjectConfig:
     repos = []
     for name in repositories:
         repos.append(config.Repository(name=name, access="write" if write else "read"))
-    retval = config.ProjectConfig(project=project, repositories=repos, git=identity,
-                                  claude_oauth_token=config.read_secret(config.CLAUDE_TOKEN_NAME),
+    retval = config.ProjectConfig(project=project, repositories=repos, git=identity, claude_oauth_token=token,
                                   created=control_inventory.now())
     return retval
 
@@ -417,7 +417,8 @@ def new(args) -> int:
         raise DriverError(f"{image.name} was built for the {image.driver} driver, not {driver.name}")
     control_creds.seed_key_values(args.dry_run, runner)
     identity = git_identity(user_config, runner)
-    project = project_config(args.project, args.repo, args.deploy_key_grants_repo_write, identity)
+    token, token_source = control_creds.claude_token(user_config, args.project, args.disposable)
+    project = project_config(args.project, args.repo, args.deploy_key_grants_repo_write, identity, token)
     address = control_inventory.allocate_address(user_config)
     cpus = args.cpus or user_config.backend.cpus
     memory_gib = args.memory_gib or user_config.backend.memory_gib
@@ -430,7 +431,7 @@ def new(args) -> int:
     github = github_for(args.repo, runner)
     started = time.monotonic()
     print(f"{command}: launching {vm} for {args.project} at {address} with {cpus} CPUs and {memory_gib} GiB "
-          f"from {image.name}", flush=True)
+          f"from {image.name}; {token_source}", flush=True)
     why = (f"the driver imports {control_images.disk_path(image.name).name} "
            f"({control_images.format_size(image.allocated_bytes)} allocated of {control_images.format_size(image.size_bytes)}) "
            "and the seed into the VM; APFS shares the blocks, so this should take seconds")
@@ -661,9 +662,10 @@ def clone(args) -> int:
     if image is None:
         raise InventoryError(f"the base image {source.image} that {args.project} came from has no record any more")
     identity = git_identity(user_config, runner)
+    token, token_source = control_creds.claude_token(user_config, args.new_project, disposable=True)
     project = config.ProjectConfig(
         project=args.new_project, repositories=[config.Repository(name=r.name, access=r.access) for r in source.repos],
-        git=identity, claude_oauth_token=config.read_secret(config.CLAUDE_TOKEN_NAME), created=control_inventory.now())
+        git=identity, claude_oauth_token=token, created=control_inventory.now())
     address = control_inventory.allocate_address(user_config)
     record = new_record(user_config, driver.name, image, args.new_project, address, source.cpus, source.memory_gib,
                         disposable=True, cloned_from=args.project)
@@ -686,6 +688,7 @@ def clone(args) -> int:
         retval = 1
         return retval
     started = time.monotonic()
+    print(f"{command}: {token_source}", flush=True)
     if was_running:
         stop_vm(driver, source.vm_name, command)
     work_dir = config.images_dir() / f"{NEW_DIR_PREFIX}{args.new_project}-disk"

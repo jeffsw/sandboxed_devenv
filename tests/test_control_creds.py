@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from sandboxed_devenv import cli, common, control_creds, control_inventory
+from sandboxed_devenv import cli, common, config, control_creds, control_inventory
 
 
 class FakeRunner:
@@ -250,3 +250,67 @@ def test_ensure_keys_renames_the_legacy_pair_and_mints_the_sandbox_key(tmp_path,
     sandbox.with_suffix(".pub").unlink()
     assert control_creds.seed_key_values(True, None)["SANDBOX_PUBKEY"] == "ssh-ed25519 (minted on the real run)"
     assert not sandbox.exists()
+
+
+def seed_project_yaml(seed: dict) -> str:
+    """The project.yaml a seed's user-data writes, decoded."""
+    import base64
+
+    import yaml
+
+    document = yaml.safe_load(seed["user-data"])
+    retval = ""
+    for entry in document.get("write_files") or []:
+        if entry.get("path") == str(config.BACKEND_PROJECT_CONFIG):
+            retval = base64.b64decode(entry["content"]).decode()
+    return retval
+
+
+def test_claude_token_policy(rig):
+    user_config = config.UserConfig()
+    token, source = control_creds.claude_token(user_config, "p", disposable=False)
+    assert token is None and "is absent" in source
+    (rig["home"] / "secrets" / "claude_oauth_token").write_text("shared-tok\n")
+    token, source = control_creds.claude_token(user_config, "p", disposable=False)
+    assert token == "shared-tok"
+    assert source == f"shared Claude token from {rig['home']}/secrets/claude_oauth_token"
+    token, source = control_creds.claude_token(user_config, "p", disposable=True)
+    assert token is None and "disposable backends get none" in source
+    permissive = config.UserConfig(backend=config.BackendDefaults(disposable_claude_token=True))
+    assert control_creds.claude_token(permissive, "p", disposable=True)[0] == "shared-tok"
+    per_project = config.UserConfig(backend=config.BackendDefaults(claude_token="per-project"))
+    token, source = control_creds.claude_token(per_project, "p", disposable=False)
+    assert token is None and "claude_oauth_token.p is absent" in source
+    (rig["home"] / "secrets" / "claude_oauth_token.p").write_text("p-tok\n")
+    assert control_creds.claude_token(per_project, "p", disposable=False)[0] == "p-tok"
+    assert control_creds.claude_token(per_project, "q", disposable=False)[0] is None
+    none = config.UserConfig(backend=config.BackendDefaults(claude_token="none"))
+    assert control_creds.claude_token(none, "p", disposable=False) == (None, "no Claude token: backend.claude_token is `none` in config.yaml")
+
+
+def test_new_and_clone_follow_the_token_policy(rig, capsys):
+    (rig["home"] / "secrets" / "claude_oauth_token").write_text("shared-tok\n")
+    assert cli.main(["new", "p"]) == 0
+    out = capsys.readouterr().out
+    assert "shared Claude token from" in out
+    assert "shared-tok" in seed_project_yaml(rig["driver"].seeds["idesbx-p"])
+    assert control_inventory.require("p").credentials[0].kind == "claude-token"
+    assert cli.main(["new", "d", "--disposable"]) == 0
+    out = capsys.readouterr().out
+    assert "disposable backends get none" in out
+    assert control_inventory.require("d").credentials == []
+    assert cli.main(["clone", "p", "q", "--yes"]) == 0
+    assert "disposable backends get none" in capsys.readouterr().out
+    assert control_inventory.require("q").credentials == []
+    (rig["home"] / "config.yaml").write_text("client_host: ssh://jsw@192.168.64.10\ngit:\n  user_name: Dev\n  user_email: d@example.invalid\n"
+                                             "backend:\n  claude_token: none\n")
+    assert cli.main(["creds", "rotate", "p", "--claude-token"]) == 1
+    assert "`none`" in capsys.readouterr().err
+
+
+def test_a_1password_reference_that_cannot_be_resolved_is_reported(rig, monkeypatch, capsys):
+    (rig["home"] / "secrets" / "claude_oauth_token").write_text("op://Private/Claude/credential\n")
+    monkeypatch.setattr(config.shutil, "which", lambda name: None)
+    assert cli.main(["new", "p"]) == 1
+    assert "1Password CLI" in capsys.readouterr().err
+    assert control_inventory.load("p") is None
