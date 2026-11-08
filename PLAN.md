@@ -553,8 +553,12 @@ Parity with today's rig, then the old scripts go.
       `--fix` deleted when their title starts with `sandboxed-devenv ` (keys with any
       other title, such as a CI deploy key made by hand, are reported and left alone).
       Done 8 November; unit-tested against a fake GitHub, since the agent's permission
-      classifier declines to register keys itself; the first real `new --repo` and `rm`
-      are the gate.
+      classifier declines to register keys itself. `repo add` ran for real the same day
+      on the user's project: the key the backend had minted was registered (id recorded,
+      state `active`), the repository cloned, and the JetBrains Client connected; `creds
+      audit` then reported only the two stale keys of earlier backends, with foreign
+      titles, left alone. The first real `new --repo` and `rm` with no manual step are
+      the gate.
 - [ ] Split the rig key in two. Today one pair, `secrets/gw_ed25519`, is both the control
       side's login to every VM (desk as `jsw`, backends as `dev`) and gw's key to the
       backends (`/home/gw/.ssh/vm_ed25519`). On the Mac rig desk's `jsw` account authorizes
