@@ -122,7 +122,7 @@ sandboxed_devenv/
   remote.py                      runs the command on the client host or a backend over SSH, parses --json
   control_driver.py              the Driver protocol
   control_driver_utm.py          utmctl, osascript, plutil, hdiutil (from create-vms.sh, make-seed.sh)
-  control_driver_incus.py        incus CLI with --format json
+  control_driver_incus.py        incus CLI with --format json: imported cloud image, seed ISO as a disk device, static leases
   control_images.py              image build / ls / rm
   control_backends.py            new, ls, start, stop, rm, clone, resources, ssh, serial-console: one backend per project
   control_client_host.py         client-host new / rm / ssh: the desk VM on the Mac rig (the Linux laptop is its own client host)
@@ -201,7 +201,7 @@ it is and whether it is rendered:
 | `sandboxed-devenv render [--out DIR]` | any | Renders every artifact (cloud-inits, nftables, AppArmor, ssh configs) and builds the wheel, without touching a VM. CI's entry point |
 | `sandboxed-devenv canary --role ROLE [--json] [--expect [FILE]]` | any | The probes for the client or backend role, run locally; `--expect` compares with the golden result for the role |
 | `sandboxed-devenv image build [--force] [--wheel PATH] [--cpus N] [--memory-gib N]` | control | Downloads the Ubuntu cloud image (checked against its SHA256SUMS), boots it once with the base cloud-init, waits for SSH and cloud-init, pushes and installs the wheel (built from the checkout unless `--wheel` names one), runs `backend prepare --stage image`, `cloud-init clean`, powers off, keeps the disk as the base image with a record of what went in. Skips the build when nothing changed; `--force` rebuilds |
-| `sandboxed-devenv image ls / rm` | control | Base images and their versions |
+| `sandboxed-devenv image ls / rm` | control | Base images and their versions, wherever the driver keeps them (a file under `~/.sandboxed_devenv/images/` on UTM, an image alias on Incus) |
 | `sandboxed-devenv client-host new [--replace] [--wheel PATH] [--cpus N] [--memory-gib N]` | control | The desk VM on the Mac rig: the cloud image as a raw disk, the host cloud-init and network-config (static address, routes to both halves of the VM subnet), a VM with a display, then over SSH the wheel and `sudo pipx install --global`, the rig key pair into the host user's secrets directory, `sudo sandboxed-devenv host install`, a reboot into GNOME. Refuses when `client_host` is `local`: the laptop is its own client host |
 | `sandboxed-devenv client-host provision [--wheel PATH]` | control | The SSH half of `client-host new` on an existing desk: the wheel and `sudo pipx install --global`, the sandbox key pair into the host user's secrets directory, `sudo sandboxed-devenv host install`. For a newer package, a new sandbox key or a changed policy |
 | `sandboxed-devenv client-host rm [--yes]` | control | Stops and deletes desk |
@@ -685,25 +685,40 @@ Parity with today's rig, then the old scripts go.
 
 Written before the laptop arrives, first run on it.
 
-- [ ] `control_driver_incus.py`: `incus launch images:ubuntu/<release>/cloud <vm> --vm`
-      with `cloud-init.user-data` and `cloud-init.network-config` config keys, `incus
-      publish` for the base image, `incus copy` for clones (a full copy on a `dir` pool
-      without reflinks, reported as a slow step), `incus list --format json` for state
-      and addresses, `incus console` for the serial console, `incus file pull` for the
-      host keys. The pool is `dir` on `incus_storage_dir`, created by `host install` if
-      absent.
+- [x] `control_driver_incus.py`, written 8 November before the laptop and first run on it.
+      Not as first sketched: the same Ubuntu cloud image as UTM (downloaded, checked against
+      `SHA256SUMS`, imported with `incus image import` as a temporary image) rather than
+      Incus's `images:` server, so one `versions.yaml` pins both drivers; the seed as a
+      NoCloud ISO attached as a disk device rather than `cloud-init.*` config keys, so the
+      guest needs no Incus agent and the minted host key travels as on UTM; `incus publish
+      --reuse` keeps the base image as the alias `sandboxed-devenv/backend-<version>`; `incus
+      init <alias> --vm` makes a backend; `incus copy` plus a new seed device makes a clone
+      (a full copy on a `dir` pool, reported as a slow step); static leases (`ipv4.address`
+      on the nic device) from a pool on the bridge's subnet, so the control side knows a
+      backend's address before it boots and no host key read-out is needed; `incus list
+      --format json` for state; `incus console --type=console`; `limits.cpu` and
+      `limits.memory` live. The driver protocol grew to carry this for both drivers:
+      `image_exists`, `image_location`, `image_size`, `keep_image`, `remove_image`,
+      `clone_from`, `address_pool`, and the flags `static_network`, `raw_disk`,
+      `live_resources`; `image build`, `new`, `clone`, `resources`, `image ls` and `image
+      rm` go through them, and the UTM path was run again on the Mac. The pool is `dir` on
+      `incus.storage_dir`, created by `host install` where `incus` exists. To confirm on
+      the laptop: the imported cloud image boots under Incus (UEFI, secure boot), cloud-init
+      finds the ISO device by its label, the static lease, publish and copy.
 - [ ] Host nftables from `policy.yaml` covering both halves: the `gw` uid for the client
       and the forward chain on the Incus bridge for the VMs. Incus network ACLs are the
       alternative if the bridge rules fight with Incus's own firewall management; decide
       on the laptop.
-- [ ] `docs/linux-laptop-install.md`: Ubuntu 26.04 (per Framework's guide on the 13 Pro),
+- [x] `docs/linux-laptop-install.md`: Ubuntu 26.04 (per Framework's guide on the 13 Pro),
       full-disk encryption, no separate volume (the Incus pool is a directory on the
-      root filesystem; only free space matters), the operations user or VM for router
-      access (summary section 5), then the package:
+      root filesystem; only free space matters), another user or VM for credentials that
+      have nothing to do with development (summary section 5), then the package:
       `sudo pipx install --global ~/proj/ide_sandbox/sandboxed_devenv`,
-      `client_host: local` in the config, `sudo sandboxed-devenv host install`,
+      `client_host: local` in the config, the user's `policy.yaml` with the laptop's
+      uplink and bridge subnet, `sudo sandboxed-devenv host install`,
       `sandboxed-devenv image build`, `sandboxed-devenv new` for the first project,
-      `sandboxed-devenv host check`.
+      `sandboxed-devenv host check`, the harnesses. Written 8 November, with the items the
+      first run on the laptop confirms marked.
 - [ ] Run `sandboxed-devenv test end-to-end` on the laptop; record timings in the summary
       (step 6 of 4.9 asked for them).
 - [ ] The Linux laptop's AppArmor and userns state is the same Ubuntu 26.04 default as

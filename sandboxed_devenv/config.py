@@ -204,11 +204,18 @@ class UtmConfig(pydantic.BaseModel):
 
 
 class IncusConfig(pydantic.BaseModel):
-    """The Incus `dir` pool's directory; None means Incus's own default location."""
+    """Incus on the Linux laptop (PLAN.md M5): the storage pool (`dir`, in ``storage_dir`` when
+    set, else Incus's own location), the managed bridge the backends join, and the address pool
+    on it. ``subnet`` and ``address_pool_start`` default to what the bridge reports and its
+    twentieth address, like UTM's."""
 
     model_config = pydantic.ConfigDict(extra="forbid")
 
     storage_dir: str | None = None
+    pool: str = "sandboxed-devenv"
+    network: str = "incusbr0"
+    subnet: str | None = None
+    address_pool_start: str | None = None
 
 
 class GitIdentity(pydantic.BaseModel):

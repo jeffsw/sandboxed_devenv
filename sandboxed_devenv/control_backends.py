@@ -188,16 +188,14 @@ def git_identity(user_config: config.UserConfig, runner: common.Runner) -> confi
     return retval
 
 
-def base_image(user_config: config.UserConfig) -> control_images.ImageRecord:
-    """The base image for the running package version, with its disk present."""
+def base_image(driver: control_driver.Driver) -> control_images.ImageRecord:
+    """The base image for the running package version, which the driver must hold."""
     name = control_images.image_name(common.package_version())
     retval = control_images.load_record(name)
-    disk = control_images.disk_path(name)
-    if retval is None or not disk.is_file():
-        raise RemoteError(f"no base image {disk} for package {common.package_version()}; `sandboxed-devenv image build` makes it")
-    status = disk.stat()
-    retval.size_bytes = status.st_size
-    retval.allocated_bytes = status.st_blocks * 512
+    if retval is None or not driver.image_exists(name):
+        raise RemoteError(f"no base image {driver.image_location(name)} for package {common.package_version()}; "
+                          "`sandboxed-devenv image build` makes it")
+    retval.allocated_bytes, retval.size_bytes = driver.image_size(name)
     return retval
 
 
@@ -212,15 +210,15 @@ def project_config(project: str, repositories: list[str], write: bool, identity:
 
 
 def write_project_seed(seed_dir, user_config: config.UserConfig, project: config.ProjectConfig, hostname: str,
-                       address: str, keys: dict[str, str], host_key: tuple[str, str]) -> None:
+                       address: str, keys: dict[str, str], host_key: tuple[str, str], static_network: bool = True) -> None:
     """The NoCloud seed for a project's backend: the project user-data (the control and sandbox
     keys for dev, the VM's own host key pair), meta-data with a fresh instance id, and the static
-    network-config."""
+    network-config where the driver's network has no leases of its own."""
     values = render.default_values(user_config, **keys)
     values.update(render.host_key_values(*host_key))
     values.update(render.project_values(project, hostname, address))
     user_data = render.cloudinit_document("backend", "cloudinit-project", "user-data", values)
-    network_config = render.cloudinit_document("backend", "cloudinit", "network-config", values)
+    network_config = render.cloudinit_document("backend", "cloudinit", "network-config", values) if static_network else None
     stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d%H%M%S")
     render.write_seed(seed_dir, user_data, f"{hostname}-{stamp}", hostname, network_config)
 
@@ -337,10 +335,12 @@ def vm_state(driver: control_driver.Driver, vm: str) -> str:
 
 
 def launch(user_config: config.UserConfig, driver: control_driver.Driver, runner: common.Runner, record: ProjectRecord,
-           project: config.ProjectConfig, disk, command: str, why_disk: str) -> dict:
-    """Create the VM from a disk and the project's seed, start it, wait for ready, pin the host
-    keys on the client host; returns the backend's status report. The inventory record is saved
-    before the VM starts, so a failure leaves something `rm` can clean up."""
+           project: config.ProjectConfig, command: str, why_disk: str, image: str | None = None,
+           source: str | None = None) -> dict:
+    """Create the VM from the base image, or as a copy of a stopped VM, with the project's seed;
+    start it, wait for ready, pin the host keys on the client host; returns the backend's status
+    report. The inventory record is saved before the VM starts, so a failure leaves something
+    `rm` can clean up."""
     hostname = hostname_for(record.vm_name)
     keys = control_creds.seed_key_values(False, runner)
     host_private, host_public = remote.generate_host_key(hostname)
@@ -351,13 +351,18 @@ def launch(user_config: config.UserConfig, driver: control_driver.Driver, runner
     work_dir.mkdir(parents=True)
     try:
         seed_dir = work_dir / "seed"
-        write_project_seed(seed_dir, user_config, project, hostname, record.address, keys, (host_private, host_public))
+        write_project_seed(seed_dir, user_config, project, hostname, record.address, keys, (host_private, host_public),
+                           driver.static_network)
         del host_private
         remote.forget_host_keys(record.vm_name)
         remote.pin_host_key(record.vm_name, record.address, host_public)
+        spec = VmSpec(name=record.vm_name, disk=None, cpus=record.cpus, memory_gib=record.memory_gib, seed_dir=seed_dir,
+                      image=image, address=None if driver.static_network else record.address, disk_gib=record.disk_gib)
         with common.slow_step(command, "create", why_disk):
-            driver.create(VmSpec(name=record.vm_name, disk=disk, cpus=record.cpus, memory_gib=record.memory_gib,
-                                 seed_dir=seed_dir))
+            if source is not None:
+                driver.clone_from(source, spec)
+            else:
+                driver.create(spec)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
     control_inventory.save(record)
@@ -386,7 +391,7 @@ def new_plan_lines(record: ProjectRecord, project: config.ProjectConfig, image: 
                    user_config: config.UserConfig) -> list[str]:
     repos = ", ".join(repository.name for repository in project.repositories) or "none"
     retlist = [
-        f"would launch {record.vm_name} for project {record.project} from {control_images.disk_path(image.name)} "
+        f"would launch {record.vm_name} for project {record.project} from {image.name} "
         f"({control_images.format_size(image.allocated_bytes)} allocated of {control_images.format_size(image.size_bytes)}) "
         f"with {record.cpus} CPUs and {record.memory_gib} GiB at {record.address}",
         f"would render the project seed: hostname {hostname_for(record.vm_name)}, repositories {repos}, "
@@ -412,14 +417,14 @@ def new(args) -> int:
     vm = user_config.vm_name(args.project)
     if driver.exists(vm):
         raise DriverError(f"a VM named {vm} exists but is not in the inventory; delete it or choose another project name")
-    image = base_image(user_config)
+    image = base_image(driver)
     if image.driver != driver.name:
         raise DriverError(f"{image.name} was built for the {image.driver} driver, not {driver.name}")
     control_creds.seed_key_values(args.dry_run, runner)
     identity = git_identity(user_config, runner)
     token, token_source = control_creds.claude_token(user_config, args.project, args.disposable)
     project = project_config(args.project, args.repo, args.deploy_key_grants_repo_write, identity, token)
-    address = control_inventory.allocate_address(user_config)
+    address = control_inventory.allocate_address(driver.address_pool(user_config))
     cpus = args.cpus or user_config.backend.cpus
     memory_gib = args.memory_gib or user_config.backend.memory_gib
     record = new_record(user_config, driver.name, image, args.project, address, cpus, memory_gib, args.disposable)
@@ -432,11 +437,11 @@ def new(args) -> int:
     started = time.monotonic()
     print(f"{command}: launching {vm} for {args.project} at {address} with {cpus} CPUs and {memory_gib} GiB "
           f"from {image.name}; {token_source}", flush=True)
-    why = (f"the driver imports {control_images.disk_path(image.name).name} "
+    why = (f"the {driver.name} driver makes the VM from {image.name} "
            f"({control_images.format_size(image.allocated_bytes)} allocated of {control_images.format_size(image.size_bytes)}) "
-           "and the seed into the VM; APFS shares the blocks, so this should take seconds")
+           "and the seed" + ("; APFS shares the blocks, so this should take seconds" if driver.name == "utm" else ""))
     try:
-        launch(user_config, driver, runner, record, project, control_images.disk_path(image.name), command, why)
+        launch(user_config, driver, runner, record, project, command, why, image=image.name)
     except (RemoteError, DriverError) as error:
         print(f"{command}: failed: {error}", file=sys.stderr)
         print(f"{command}: {vm} is left as it is for inspection (`sandboxed-devenv serial-console {args.project}`, "
@@ -667,7 +672,7 @@ def clone(args) -> int:
     project = config.ProjectConfig(
         project=args.new_project, repositories=[config.Repository(name=r.name, access=r.access) for r in source.repos],
         git=identity, claude_oauth_token=token, created=control_inventory.now())
-    address = control_inventory.allocate_address(user_config)
+    address = control_inventory.allocate_address(driver.address_pool(user_config))
     record = new_record(user_config, driver.name, image, args.new_project, address, source.cpus, source.memory_gib,
                         disposable=True, cloned_from=args.project)
     state = vm_state(driver, source.vm_name)
@@ -692,28 +697,21 @@ def clone(args) -> int:
     print(f"{command}: {token_source}", flush=True)
     if was_running:
         stop_vm(driver, source.vm_name, command)
-    work_dir = config.images_dir() / f"{NEW_DIR_PREFIX}{args.new_project}-disk"
-    if work_dir.exists():
-        shutil.rmtree(work_dir)
-    work_dir.mkdir(parents=True)
-    disk = work_dir / f"{new_vm}.img"
+    why = (f"the {driver.name} driver copies {source.vm_name}'s disk and takes the new seed"
+           + ("; APFS shares the blocks" if driver.name == "utm" else "; a full copy on a dir pool"))
     try:
-        with common.slow_step(command, "copy", f"cloning {source.vm_name}'s disk out of its bundle; APFS shares the blocks"):
-            driver.export_disk(source.vm_name, disk)
+        status = launch(user_config, driver, runner, record, project, command, why, source=source.vm_name)
+    except (RemoteError, DriverError) as error:
+        print(f"{command}: failed: {error}", file=sys.stderr)
+        print(f"{command}: {new_vm} is left for inspection; `sandboxed-devenv rm {args.new_project}` removes it",
+              file=sys.stderr)
         if was_running:
             driver.start(source.vm_name)
-            print(f"{command}: {source.vm_name} started again", flush=True)
-        why = f"the driver imports the copy ({control_images.format_size(disk.stat().st_blocks * 512)} allocated) and the seed"
-        try:
-            status = launch(user_config, driver, runner, record, project, disk, command, why)
-        except (RemoteError, DriverError) as error:
-            print(f"{command}: failed: {error}", file=sys.stderr)
-            print(f"{command}: {new_vm} is left for inspection; `sandboxed-devenv rm {args.new_project}` removes it",
-                  file=sys.stderr)
-            retval = 1
-            return retval
-    finally:
-        shutil.rmtree(work_dir, ignore_errors=True)
+        retval = 1
+        return retval
+    if was_running:
+        driver.start(source.vm_name)
+        print(f"{command}: {source.vm_name} started again", flush=True)
     backend = remote.backend(address, new_vm, runner)
     rekeyed = []
     for repository in project.repositories:
@@ -764,7 +762,7 @@ def resources(args) -> int:
         raise DriverError(f"{record.vm_name} is in the inventory but not in the driver")
     cpus = args.cpus or record.cpus
     memory_gib = args.memory_gib or record.memory_gib
-    running = state != control_driver.STOPPED
+    running = state != control_driver.STOPPED and not driver.live_resources
     if args.dry_run:
         if running:
             print(f"would stop {record.vm_name} ({state}), since the {driver.name} driver changes resources on a stopped VM")

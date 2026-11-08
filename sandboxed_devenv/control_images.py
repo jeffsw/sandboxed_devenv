@@ -5,10 +5,11 @@ SHA256SUMS), converts it to a raw disk grown to `disk_gib` (sparse; the filesyst
 first boot), boots it once with the image-stage cloud-init, waits for SSH and for cloud-init,
 pushes the wheel and installs it with `sudo pipx install --global`, runs `backend prepare
 --stage image`, then `cloud-init clean` so the next boot is a first boot again, powers the VM
-off and keeps its disk as ``~/.sandboxed_devenv/images/backend-<package version>.img`` with a
-YAML record beside it saying what went in. A project's backend (`new`, PLAN.md M2) is an APFS
-clone of that file. Rebuilding happens when any recorded version, or the rendered image
-cloud-init, differs from what the package carries now, or with `--force`.
+off and has the driver keep its disk as the base image ``backend-<package version>``: a raw
+file under ``~/.sandboxed_devenv/images/`` on UTM, an image alias on Incus, with a YAML record
+under that directory either way saying what went in. A project's backend (`new`, PLAN.md M2)
+is made from that image. Rebuilding happens when any recorded version, the package's source or
+the rendered image cloud-init differs from what the package carries now, or with `--force`.
 
 Slow steps say what they do and why before they start and how long they took when they end
 (PLAN.md, "Principles"); nothing here draws a progress bar.
@@ -123,7 +124,8 @@ def image_name(package_version: str) -> str:
 
 
 def disk_path(name: str) -> pathlib.Path:
-    retval = config.images_dir() / f"{name}{DISK_SUFFIX}"
+    """The image file of a file-based driver (UTM); Incus keeps its images itself."""
+    retval = control_driver.image_file(name)
     return retval
 
 
@@ -148,22 +150,31 @@ def load_record(name: str) -> ImageRecord | None:
     return retval
 
 
-def list_images() -> list[ImageRecord]:
-    """Every disk under the images directory with its record, oldest first; a disk without a
-    record is listed with what the file alone says."""
+def list_images(driver=None) -> list[ImageRecord]:
+    """Every base image the images directory knows, oldest first: each record, plus a disk file
+    without a record listed with what the file alone says. Sizes come from the driver when one
+    is given."""
     retlist = []
     images = config.images_dir()
     if images.is_dir():
-        for disk in sorted(images.glob(f"{IMAGE_PREFIX}*{DISK_SUFFIX}")):
-            name = disk.name[: -len(DISK_SUFFIX)]
+        names = set()
+        for path in sorted(images.glob(f"{IMAGE_PREFIX}*{RECORD_SUFFIX}")):
+            names.add(path.name[: -len(RECORD_SUFFIX)])
+        for path in sorted(images.glob(f"{IMAGE_PREFIX}*{DISK_SUFFIX}")):
+            names.add(path.name[: -len(DISK_SUFFIX)])
+        for name in sorted(names):
             record = load_record(name)
             if record is None:
                 record = ImageRecord(name=name, driver="?", architecture="?", package_version="?",
                                      ide_backend_version="?", ubuntu_release="?", ubuntu_image_serial="?",
                                      cloudinit_sha256="", disk_gib=0)
-            status = disk.stat()
-            record.size_bytes = status.st_size
-            record.allocated_bytes = status.st_blocks * 512
+            disk = disk_path(name)
+            if driver is not None and driver.image_exists(name):
+                record.allocated_bytes, record.size_bytes = driver.image_size(name)
+            elif disk.is_file():
+                status = disk.stat()
+                record.size_bytes = status.st_size
+                record.allocated_bytes = status.st_blocks * 512
             retlist.append(record)
     return retlist
 
@@ -201,13 +212,16 @@ def wanted_record(versions: config.Versions, user_config: config.UserConfig, arc
     return retval
 
 
-def rebuild_reasons(current: ImageRecord | None, wanted: ImageRecord) -> list[str]:
-    """Why the image must be (re)built; empty when the existing one matches."""
+def rebuild_reasons(current: ImageRecord | None, wanted: ImageRecord, exists: bool | None = None) -> list[str]:
+    """Why the image must be (re)built; empty when the existing one matches. ``exists`` is the
+    driver's word on whether it holds the image; the disk file's presence when not given."""
     retlist = []
+    if exists is None:
+        exists = disk_path(wanted.name).is_file()
     if current is None:
         retlist.append("no image yet")
-    elif not disk_path(wanted.name).is_file():
-        retlist.append(f"record without a disk at {disk_path(wanted.name)}")
+    elif not exists:
+        retlist.append(f"record without an image ({disk_path(wanted.name)} or the driver's alias)")
     else:
         for key, value in wanted.inputs().items():
             have = current.inputs().get(key)
@@ -339,10 +353,12 @@ def prepare_disk(cloud_image: pathlib.Path, disk: pathlib.Path, disk_gib: int, r
 # --- the build -----------------------------------------------------------------------------------
 
 
-def seed_values(user_config: config.UserConfig, public_key: str, host_key: dict[str, str] | None = None) -> dict[str, str]:
+def seed_values(user_config: config.UserConfig, public_key: str, host_key: dict[str, str] | None = None,
+                address: str | None = None) -> dict[str, str]:
     """The image seed's values: the control key for dev, the build address, and the host key pair,
     or the fixed digest values when the document is rendered only to be hashed."""
-    retdict = render.default_values(user_config, CONTROL_PUBKEY=public_key, ADDRESS=user_config.utm.image_build_address)
+    retdict = render.default_values(user_config, CONTROL_PUBKEY=public_key,
+                                    ADDRESS=address or user_config.utm.image_build_address)
     retdict.update(host_key or render.HOST_KEY_DIGEST_VALUES)
     return retdict
 
@@ -352,20 +368,24 @@ def build_vm_name(user_config: config.UserConfig) -> str:
     return retval
 
 
-def plan_lines(wanted: ImageRecord, reasons: list[str], user_config: config.UserConfig, driver_name: str,
-               cloud_image: pathlib.Path, wheel: str, cpus: int, memory_gib: int) -> list[str]:
+def plan_lines(wanted: ImageRecord, reasons: list[str], user_config: config.UserConfig, driver,
+               cloud_image: pathlib.Path, wheel: str, cpus: int, memory_gib: int, address: str) -> list[str]:
     vm = build_vm_name(user_config)
-    address = user_config.utm.image_build_address
     retlist = [
-        f"would build {disk_path(wanted.name)} with the {driver_name} driver: " + "; ".join(reasons),
+        f"would build {driver.image_location(wanted.name)} with the {driver.name} driver: " + "; ".join(reasons),
         f"would fetch {cloud_image.name} into {cloud_image.parent} unless present, checked against {CHECKSUMS_FILE}",
-        f"would convert it to a raw disk of {wanted.disk_gib} GiB (sparse) with qemu-img",
+    ]
+    if driver.raw_disk:
+        retlist.append(f"would convert it to a raw disk of {wanted.disk_gib} GiB (sparse) with qemu-img")
+    else:
+        retlist.append(f"would import it as the driver's image, root disk {wanted.disk_gib} GiB")
+    retlist += [
         f"would render the image-stage seed (hostname {IMAGE_HOSTNAME}, address {address}) and create VM {vm} "
         f"with {cpus} CPUs and {memory_gib} GiB",
         f"would start {vm}, wait for SSH as dev at {address}, then for cloud-init",
         f"would push {wheel}, run `sudo pipx install --global` and `sudo sandboxed-devenv backend prepare --stage image`",
         "would run `sudo cloud-init clean --logs --machine-id --configs network` and power off",
-        f"would keep the disk as {disk_path(wanted.name)} with {record_path(wanted.name)}, then delete {vm}",
+        f"would keep the disk as {driver.image_location(wanted.name)} with {record_path(wanted.name)}, then delete {vm}",
     ]
     return retlist
 
@@ -415,15 +435,17 @@ def build(args) -> int:
     cpus = args.cpus or user_config.backend.cpus
     memory_gib = args.memory_gib or user_config.backend.memory_gib
     public_key = control_creds.seed_key_values(args.dry_run, runner)["CONTROL_PUBKEY"]
-    values = seed_values(user_config, public_key)
+    pool = driver.address_pool(user_config)
+    address = pool.build_address
+    values = seed_values(user_config, public_key, address=address)
     digest_user_data = render.cloudinit_document("backend", "cloudinit-image", "user-data", values)
-    network_config = render.cloudinit_document("backend", "cloudinit", "network-config", values)
+    network_config = render.cloudinit_document("backend", "cloudinit", "network-config", values) if driver.static_network else None
     wanted = wanted_record(versions, user_config, architecture, digest_user_data, driver.name)
-    reasons = rebuild_reasons(load_record(wanted.name), wanted)
+    reasons = rebuild_reasons(load_record(wanted.name), wanted, driver.image_exists(wanted.name))
     if args.force:
         reasons.append("--force")
     if not reasons:
-        print(f"{COMMAND}: {disk_path(wanted.name)} is up to date (package {wanted.package_version}, IDE backend "
+        print(f"{COMMAND}: {driver.image_location(wanted.name)} is up to date (package {wanted.package_version}, IDE backend "
               f"{wanted.ide_backend_version}, Ubuntu {wanted.ubuntu_release} serial {wanted.ubuntu_image_serial}); "
               "--force rebuilds it")
         retval = 0
@@ -431,7 +453,7 @@ def build(args) -> int:
     cloud_image = cloud_image_path(versions, architecture)
     if args.dry_run:
         wheel_text = args.wheel or "the wheel built from the checkout"
-        for line in plan_lines(wanted, reasons, user_config, driver.name, cloud_image, wheel_text, cpus, memory_gib):
+        for line in plan_lines(wanted, reasons, user_config, driver, cloud_image, wheel_text, cpus, memory_gib, address):
             print(line)
         retval = 0
         return retval
@@ -453,26 +475,32 @@ def build(args) -> int:
             raise RenderError("run `image build` inside a checkout of the repository, or pass --wheel PATH")
         wheel = render.build_wheel(checkout, build_dir, runner)
     cloud_image = ensure_cloud_image(versions, architecture)
-    disk = build_dir / f"{wanted.name}{DISK_SUFFIX}"
-    with common.slow_step(COMMAND, "raw disk", f"converting {cloud_image.name} to {disk} and growing it to "
-                          f"{wanted.disk_gib} GiB (sparse: the filesystem fills it at first boot)"):
-        prepare_disk(cloud_image, disk, wanted.disk_gib, runner)
+    if driver.raw_disk:
+        disk = build_dir / f"{wanted.name}{DISK_SUFFIX}"
+        with common.slow_step(COMMAND, "raw disk", f"converting {cloud_image.name} to {disk} and growing it to "
+                              f"{wanted.disk_gib} GiB (sparse: the filesystem fills it at first boot)"):
+            prepare_disk(cloud_image, disk, wanted.disk_gib, runner)
+    else:
+        disk = cloud_image
     seed_dir = build_dir / "seed"
     instance_id = f"{IMAGE_HOSTNAME}-{datetime.datetime.now(datetime.UTC).strftime('%Y%m%d%H%M%S')}"
     host_private, host_public = remote.generate_host_key(IMAGE_HOSTNAME)
-    user_data = render.cloudinit_document("backend", "cloudinit-image", "user-data",
-                                          seed_values(user_config, public_key, render.host_key_values(host_private, host_public)))
+    user_data = render.cloudinit_document(
+        "backend", "cloudinit-image", "user-data",
+        seed_values(user_config, public_key, render.host_key_values(host_private, host_public), address))
     render.write_seed(seed_dir, user_data, instance_id, IMAGE_HOSTNAME, network_config)
 
     vm = build_vm_name(user_config)
     remove_leftover(driver, vm)
     remote.forget_host_keys(vm)
-    remote.pin_host_key(vm, user_config.utm.image_build_address, host_public)
-    with common.slow_step(COMMAND, "create", f"UTM copies the {wanted.disk_gib} GiB disk and the seed ISO into the bundle of {vm}"):
-        driver.create(VmSpec(name=vm, disk=disk, cpus=cpus, memory_gib=memory_gib, seed_dir=seed_dir))
-    disk.unlink()
+    remote.pin_host_key(vm, address, host_public)
+    with common.slow_step(COMMAND, "create", f"the {driver.name} driver takes the {wanted.disk_gib} GiB disk and the seed into {vm}"):
+        driver.create(VmSpec(name=vm, disk=disk, cpus=cpus, memory_gib=memory_gib, seed_dir=seed_dir,
+                             address=None if driver.static_network else address, disk_gib=wanted.disk_gib))
+    if driver.raw_disk:
+        disk.unlink()
     driver.start(vm)
-    backend = remote.backend(user_config.utm.image_build_address, vm, runner)
+    backend = remote.backend(address, vm, runner)
     try:
         provision(backend, wheel)
         with common.slow_step(COMMAND, "power off", f"waiting for {vm} to stop"):
@@ -484,28 +512,23 @@ def build(args) -> int:
                 control_driver.wait_for_state(driver, vm, control_driver.STOPPED, LEFTOVER_STOP_TIMEOUT)
     except (RemoteError, DriverError) as error:
         print(f"{COMMAND}: failed: {error}", file=sys.stderr)
-        print(f"{COMMAND}: the build VM {vm} is left as it is for inspection: `utmctl status {vm}`, "
-              f"`ssh -i {remote.control_key_path()} -o IdentitiesOnly=yes dev@{user_config.utm.image_build_address}`, "
-              f"`utmctl delete {vm}`; the next `image build` removes it", file=sys.stderr)
+        print(f"{COMMAND}: the build VM {vm} is left as it is for inspection: "
+              f"`ssh -i {remote.control_key_path()} -o IdentitiesOnly=yes dev@{address}`; the next `image build` removes it",
+              file=sys.stderr)
         shutil.rmtree(build_dir, ignore_errors=True)
         retval = 1
         return retval
 
     images.mkdir(parents=True, exist_ok=True)
-    final_disk = disk_path(wanted.name)
-    temporary = final_disk.with_name(f"{final_disk.name}.tmp")
-    with common.slow_step(COMMAND, "export", f"cloning {vm}'s disk out of its bundle to {final_disk}"):
-        driver.export_disk(vm, temporary)
-        os.replace(temporary, final_disk)
-    status = final_disk.stat()
-    wanted.size_bytes = status.st_size
-    wanted.allocated_bytes = status.st_blocks * 512
+    with common.slow_step(COMMAND, "keep", f"the {driver.name} driver keeps {vm}'s disk as the base image {wanted.name}"):
+        location = driver.keep_image(vm, wanted.name)
+    wanted.allocated_bytes, wanted.size_bytes = driver.image_size(wanted.name)
     wanted.built = datetime.datetime.now(datetime.UTC).replace(microsecond=0)
     record_path(wanted.name).write_text(wanted.to_yaml())
     driver.delete(vm)
     remote.forget_host_keys(vm)
     shutil.rmtree(build_dir, ignore_errors=True)
-    print(f"{COMMAND}: {final_disk} ready: {format_size(wanted.allocated_bytes)} allocated of "
+    print(f"{COMMAND}: {location} ready: {format_size(wanted.allocated_bytes)} allocated of "
           f"{format_size(wanted.size_bytes)}, IDE backend {wanted.ide_backend_version}, Ubuntu {wanted.ubuntu_release} "
           f"serial {wanted.ubuntu_image_serial}, package {wanted.package_version}; total "
           f"{common.format_duration(time.monotonic() - started)}")
@@ -522,7 +545,11 @@ def cmd_build(args) -> int:
 
 
 def cmd_ls(args) -> int:
-    records = list_images()
+    try:
+        driver = control_driver.load_driver(common.Runner(dry_run=args.dry_run, verbose=args.verbose))
+    except DriverError:
+        driver = None
+    records = list_images(driver)
     if not records:
         print(f"no base images under {config.images_dir()}; `sandboxed-devenv image build` makes one")
     else:
@@ -544,18 +571,32 @@ def cmd_ls(args) -> int:
 
 def cmd_rm(args) -> int:
     name = normalize_name(args.image)
-    disk = disk_path(name)
+    runner = common.Runner(dry_run=args.dry_run, verbose=args.verbose)
+    try:
+        driver = control_driver.load_driver(runner)
+    except DriverError:
+        driver = None
     record = record_path(name)
-    if not disk.exists() and not record.exists():
+    held = driver.image_exists(name) if driver else disk_path(name).exists()
+    if not held and not record.exists():
         print(f"sandboxed-devenv image rm: no image named {name} under {config.images_dir()}", file=sys.stderr)
         retval = 1
         return retval
-    for path in (disk, record):
-        if path.exists():
-            if args.dry_run:
-                print(f"would remove {path}")
-            else:
-                path.unlink()
-                print(f"removed {path}")
+    if held:
+        location = driver.image_location(name) if driver else str(disk_path(name))
+        if args.dry_run:
+            print(f"would remove {location}")
+        elif driver:
+            driver.remove_image(name)
+            print(f"removed {location}")
+        else:
+            disk_path(name).unlink()
+            print(f"removed {location}")
+    if record.exists():
+        if args.dry_run:
+            print(f"would remove {record}")
+        else:
+            record.unlink()
+            print(f"removed {record}")
     retval = 0
     return retval

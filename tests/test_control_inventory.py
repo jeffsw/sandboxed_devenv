@@ -50,15 +50,16 @@ def test_project_names():
 
 
 def test_allocate_address_skips_the_inventory_the_fixed_hosts_and_answering_hosts(home):
-    user_config = config.UserConfig()
+    pool = control_inventory.utm_pool(config.UserConfig())
+    assert pool.build_address == "192.168.64.19" and "192.168.64.10" in pool.reserved
     reports = []
-    assert control_inventory.allocate_address(user_config, probe=lambda address: False, report=reports.append) == "192.168.64.20"
+    assert control_inventory.allocate_address(pool, probe=lambda address: False, report=reports.append) == "192.168.64.20"
     control_inventory.save(record("p", "192.168.64.20"))
     answering = {"192.168.64.21"}
-    chosen = control_inventory.allocate_address(user_config, probe=lambda address: address in answering, report=reports.append)
+    chosen = control_inventory.allocate_address(pool, probe=lambda address: address in answering, report=reports.append)
     assert chosen == "192.168.64.22"
     assert reports == ["address 192.168.64.21 answers on port 22 but is not in the inventory; skipping it"]
-    tiny = config.UserConfig(utm=config.UtmConfig(subnet="192.168.64.0/30", address_pool_start="192.168.64.2"))
+    tiny = control_inventory.utm_pool(config.UserConfig(utm=config.UtmConfig(subnet="192.168.64.0/30", address_pool_start="192.168.64.2")))
     control_inventory.save(record("q", "192.168.64.2"))
     with pytest.raises(control_inventory.InventoryError):
         control_inventory.allocate_address(tiny, probe=lambda address: False, report=reports.append)

@@ -108,3 +108,28 @@ def test_host_check_dry_run_passes_json_and_expect_to_the_canary(capsys, monkeyp
     assert "canary --role client --json --expect" in out
     assert cli.main(["--dry-run", "host", "check", "--expect", "/tmp/golden.json"]) == 0
     assert "--expect /tmp/golden.json" in capsys.readouterr().out
+
+
+def test_incus_pool_step_creates_the_dir_pool_where_incus_exists(tmp_path, monkeypatch):
+    import subprocess
+
+    monkeypatch.setenv("SANDBOXED_DEVENV_HOME", str(tmp_path))
+    monkeypatch.setattr(host_install.shutil, "which", lambda name: None)
+    ctx = host_install.Context(apply=True, values={}, command="host install", secrets_dir=tmp_path)
+    assert host_install.step_incus_pool(ctx) == []
+    monkeypatch.setattr(host_install.shutil, "which", lambda name: "/usr/bin/incus")
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        status = 1 if command[:3] == ["incus", "storage", "show"] else 0
+        retval = subprocess.CompletedProcess(command, status, "", "")
+        return retval
+
+    monkeypatch.setattr(host_install, "run", fake_run)
+    (tmp_path / "config.yaml").write_text("incus:\n  storage_dir: /var/lib/sandboxed-devenv/incus\n")
+    outcomes = host_install.step_incus_pool(ctx)
+    assert [result.status for result in outcomes] == [steps.CHANGED]
+    assert commands[-1] == ["incus", "storage", "create", "sandboxed-devenv", "dir", "source=/var/lib/sandboxed-devenv/incus"]
+    monkeypatch.setattr(host_install, "run", lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "", ""))
+    assert [result.status for result in host_install.step_incus_pool(ctx)] == [steps.UNCHANGED]

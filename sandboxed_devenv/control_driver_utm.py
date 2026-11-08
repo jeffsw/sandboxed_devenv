@@ -31,6 +31,7 @@ about UTM 4.7.5 with the Apple Virtualization backend, kept here with dates:
 
 import dataclasses
 import json
+import os
 import pathlib
 import platform
 import shutil
@@ -38,7 +39,7 @@ import subprocess
 import tempfile
 import time
 
-from sandboxed_devenv import common
+from sandboxed_devenv import common, config, control_driver, control_inventory
 from sandboxed_devenv.control_driver import DriverError, VmInfo, VmSpec
 
 DRIVER_NAME = "utm"
@@ -180,6 +181,56 @@ class UtmDriver:
 
     # --- the protocol -----------------------------------------------------------------------------
 
+    static_network = True
+    raw_disk = True
+    live_resources = False
+
+    def address_pool(self, user_config: config.UserConfig) -> control_inventory.AddressPool:
+        retval = control_inventory.utm_pool(user_config)
+        return retval
+
+    def image_exists(self, name: str) -> bool:
+        retval = control_driver.image_file(name).is_file()
+        return retval
+
+    def image_location(self, name: str) -> str:
+        retval = str(control_driver.image_file(name))
+        return retval
+
+    def image_size(self, name: str) -> tuple[int, int]:
+        path = control_driver.image_file(name)
+        retval = (0, 0)
+        if path.is_file():
+            status = path.stat()
+            retval = (status.st_blocks * 512, status.st_size)
+        return retval
+
+    def keep_image(self, vm: str, name: str) -> str:
+        """The stopped build VM's disk cloned out of its bundle into the images directory."""
+        final = control_driver.image_file(name)
+        final.parent.mkdir(parents=True, exist_ok=True)
+        temporary = final.with_name(f"{final.name}.tmp")
+        self.export_disk(vm, temporary)
+        if not self.runner.dry_run:
+            os.replace(temporary, final)
+        retval = str(final)
+        return retval
+
+    def remove_image(self, name: str) -> bool:
+        path = control_driver.image_file(name)
+        retval = path.exists()
+        if retval and not self.runner.dry_run:
+            path.unlink()
+        return retval
+
+    def clone_from(self, source: str, spec: VmSpec) -> None:
+        """The stopped source VM's disk cloned out of its bundle (APFS shares the blocks), then a
+        VM made from the copy with the spec's seed; the copy is removed once UTM has imported it."""
+        with tempfile.TemporaryDirectory(prefix="sandboxed-devenv-clone-", dir=config.images_dir()) as temporary:
+            disk = pathlib.Path(temporary) / f"{spec.name}{control_driver.IMAGE_FILE_SUFFIX}"
+            self.export_disk(source, disk)
+            self.create(dataclasses.replace(spec, disk=disk, image=None))
+
     def available(self) -> str | None:
         retval = None
         if platform.system() != "Darwin":
@@ -213,8 +264,13 @@ class UtmDriver:
         return retval
 
     def create(self, spec: VmSpec) -> None:
-        """Build the seed ISO, then make the VM through AppleScript; UTM copies the disk and the ISO
-        into the bundle. A VM with a display also gets its input devices enabled."""
+        """Build the seed ISO, then make the VM through AppleScript; UTM copies the disk (the file
+        given, or a base image kept under the images directory) and the ISO into the bundle. A VM
+        with a display also gets its input devices enabled."""
+        if spec.disk is None and spec.image is not None:
+            spec = dataclasses.replace(spec, disk=control_driver.image_file(spec.image))
+        if spec.disk is None:
+            raise DriverError(f"{spec.name}: neither a disk file nor a base image to make the VM from")
         if not spec.disk.is_file() and not self.runner.dry_run:
             raise DriverError(f"no disk at {spec.disk}")
         with tempfile.TemporaryDirectory(prefix="sandboxed-devenv-seed-") as temporary:

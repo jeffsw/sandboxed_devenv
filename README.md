@@ -17,7 +17,9 @@ backend, and any AI agent run in per-project VMs with controlled egress.
   control key for the control machine into every VM, the sandbox key for `gw` into the
   backends only; every VM's SSH host key is minted into its seed and pinned before boot
 - `docs/runbook.md`: install, secrets, a project's life, disposal, rotation, the harnesses,
-  the interactive checklist, troubleshooting `files/` under it holds everything a role receives on disk, with a manifest;
+  the interactive checklist, troubleshooting
+- `docs/linux-laptop-install.md`: a Linux machine's first day as control side, client host and
+  hypervisor in one `files/` under it holds everything a role receives on disk, with a manifest;
   `versions.yaml` pins every version and `policy.yaml` is the egress policy
 - `AGENTS.md`: conventions and the verification contract for humans and agents
 - `ide_sandboxing.html`: original brainstorming document, kept for history

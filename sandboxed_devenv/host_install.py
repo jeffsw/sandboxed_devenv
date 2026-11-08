@@ -284,6 +284,33 @@ def step_gateway(ctx: Context) -> list[Outcome]:
     return retlist
 
 
+def incus_pool_exists(pool: str) -> bool:
+    completed = run(["incus", "storage", "show", pool], capture_output=True)
+    retval = completed.returncode == 0
+    return retval
+
+
+def create_incus_pool(pool: str, storage_dir: str | None) -> None:
+    command = ["incus", "storage", "create", pool, "dir"]
+    if storage_dir:
+        command.append(f"source={storage_dir}")
+    run(command, check=True)
+
+
+def step_incus_pool(ctx: Context) -> list[Outcome]:
+    """On a laptop that drives Incus itself: the tool's `dir` storage pool (PLAN.md M5), in
+    ``incus.storage_dir`` when set, else where Incus keeps its own. Nothing where there is no
+    incus."""
+    retlist = []
+    if not shutil.which("incus"):
+        return retlist
+    incus = config.load_user_config().incus
+    where = f"source={incus.storage_dir}" if incus.storage_dir else "Incus's own location"
+    retlist.append(outcome(ctx, f"incus storage pool {incus.pool}", f"incus storage create {incus.pool} dir ({where})",
+                           not incus_pool_exists(incus.pool), lambda: create_incus_pool(incus.pool, incus.storage_dir), "present"))
+    return retlist
+
+
 STEPS = [
     step_packages,
     step_user,
@@ -294,6 +321,7 @@ STEPS = [
     step_sysctl,
     step_nftables,
     step_gateway,
+    step_incus_pool,
 ]
 
 
@@ -316,6 +344,7 @@ def plan_lines(values: dict[str, str], secrets_dir: pathlib.Path) -> list[str]:
         f"nftables: nft --check {NFTABLES_CONF}; the service stays disabled until policy enables it",
         f"gateway: JetBrainsGateway-{values['GATEWAY_VERSION']} unpacked under {GATEWAY_DIR}, "
         f"{TOOLKIT_OPTION} in {GATEWAY_VMOPTIONS}",
+        "incus storage pool: created (dir) where incus is installed, for the backends of a laptop that drives them itself",
     ])
     return retlist
 
