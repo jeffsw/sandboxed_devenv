@@ -45,12 +45,14 @@ def test_nftables_renders_from_the_policy(tmp_path, monkeypatch):
     assert values["CLIENT_ALLOWED"] == "# no elements"
     assert values["BACKEND_PORTS"] == "{ 22, 443 }"
     assert values["SANDBOX_USER"] == "gw"
+    assert values["SANDBOX_UID"].isdigit()
     entry = render.load_manifest()["host"]["etc__nftables.conf.tmpl"]
     text = render.render_entry("host", "etc__nftables.conf.tmpl", entry, values)
     assert "define vm_subnet = 192.168.64.0/24" in text
     assert 'define uplink = "en*"' in text
     assert "ip saddr $vm_subnet ip daddr @backend_allowed tcp dport { 22, 443 } accept" in text
-    assert "meta skuid != $sandbox_user accept" in text
+    assert "meta skuid != $sandbox_uid accept" in text
+    assert f"define sandbox_uid = {render.sandbox_uid()}" in text
     assert "download.jetbrains.com" in text
     assert "@@" not in text
     assert render.nft_elements([]) == "# no elements"

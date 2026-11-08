@@ -14,6 +14,7 @@ import base64
 import json
 import os
 import pathlib
+import pwd
 import re
 import shlex
 import shutil
@@ -35,7 +36,13 @@ PLACEHOLDER = re.compile(r"@@([A-Z][A-Z0-9_]*)@@")
 DEFAULT_DESK_PASSWORD = "rehearsal"
 DEFAULT_CLIENT_HOST_USER = "jsw"
 # The client sandbox's user on the client host, whose egress the ruleset's output chain limits.
+# nft resolves a user name when the rules are parsed, so the ruleset carries the uid: the real
+# one where the user exists (`host install` creates it first), else this placeholder (CI).
 SANDBOX_USER = "gw"
+SANDBOX_UID_PLACEHOLDER = 1001
+# What `render` puts in a document when the secrets directory holds no rig key yet: CI renders
+# with placeholders, and secrets never enter its artifacts (PLAN.md, "Principles").
+RIG_PUBKEY_PLACEHOLDER = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA placeholder"
 SAMPLE_PROJECT = "sample"
 
 
@@ -143,6 +150,15 @@ def nft_ports(ports: list[int]) -> str:
     return retval
 
 
+def sandbox_uid() -> int:
+    """The sandbox user's uid on this machine, or the placeholder where the user does not exist."""
+    try:
+        retval = pwd.getpwnam(SANDBOX_USER).pw_uid
+    except KeyError:
+        retval = SANDBOX_UID_PLACEHOLDER
+    return retval
+
+
 def client_host_user(user_config: config.UserConfig) -> str:
     """The login on the client host VM: the user in ``client_host``, or the rig's default."""
     parsed = remote.parse_client_host(user_config.client_host) if user_config.client_host != "local" else None
@@ -174,6 +190,7 @@ def default_values(user_config: config.UserConfig | None = None, policy: config.
         "VM_SUBNET": policy.vm_subnet,
         "UPLINK_INTERFACE": policy.uplink_interface,
         "SANDBOX_USER": SANDBOX_USER,
+        "SANDBOX_UID": str(sandbox_uid()),
         "CLIENT_ALLOWED": nft_elements(policy.client.cidrs),
         "CLIENT_PORTS": nft_ports(policy.client.ports),
         "CLIENT_HOSTS": ", ".join(policy.client.hosts) or "none",
@@ -366,16 +383,15 @@ def cmd_render(args) -> int:
     pubkey = rig_public_key()
     command = wheel_build_command(out_dir)
     if args.dry_run:
-        key_state = "present" if pubkey else "absent, so the real run would stop"
+        key_state = "present" if pubkey else "absent, so a placeholder key is rendered"
         print(f"would render files/host and files/backend under {out_dir} (rig key {key_file}: {key_state})")
         print(f"would run in {checkout}: {shlex.join(command)}")
         retval = 0
         return retval
     if pubkey is None:
-        print(f"sandboxed-devenv render: no rig key at {key_file}; `image build` or `client-host new` creates one",
-              file=sys.stderr)
-        retval = 1
-        return retval
+        print(f"render: no rig key at {key_file}; rendering a placeholder key (`image build` or `client-host new` "
+              "mints the real one)")
+        pubkey = RIG_PUBKEY_PLACEHOLDER
     values = sample_values(RIG_PUBKEY=pubkey)
     for role in ROLES:
         try:

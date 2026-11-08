@@ -489,7 +489,11 @@ Parity with today's rig, then the old scripts go.
       `~/.sandboxed_devenv/policy.yaml` overriding it, since `host install` on a VM has
       no checkout. `sandboxed-devenv render` produces the host nftables ruleset from it,
       in two halves: the forward chain for the backends and an output chain for the
-      sandbox user. Only CIDRs reach the ruleset: nft resolves a host name at load time
+      sandbox user, matched by uid (nft resolves a user name when it parses the rules,
+      which fails wherever `gw` does not exist, such as CI; `host install` renders the real
+      uid after creating the user, `render` a placeholder). `render` without a rig key in
+      the secrets directory renders a placeholder key and says so, which is how CI runs
+      it. Only CIDRs reach the ruleset: nft resolves a host name at load time
       and refuses one that resolves to several addresses, which every CDN does (found
       8 November on desk), so the `hosts` lists are recorded and M5 decides the mechanism
       (a resolver-fed set, or Incus network ACLs). On the Mac the same ruleset lands on

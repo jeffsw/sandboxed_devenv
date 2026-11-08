@@ -139,6 +139,8 @@ def step_linger(ctx: Context) -> list[Outcome]:
 
 def step_files(ctx: Context) -> list[Outcome]:
     retlist = []
+    # The sandbox user exists by now (step_user ran), so the ruleset gets its real uid.
+    ctx.values["SANDBOX_UID"] = str(render.sandbox_uid())
     for name, entry in render.load_manifest()["host"].items():
         if entry.is_cloudinit:
             continue

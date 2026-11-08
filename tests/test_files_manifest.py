@@ -170,10 +170,15 @@ def test_project_values_carry_the_token_only_when_given():
     assert config.ProjectConfig(**yaml.safe_load(base64.b64decode(values["PROJECT_YAML_B64"]))).claude_oauth_token == "tok"
 
 
-def test_render_needs_the_rig_key(tmp_path, monkeypatch, capsys):
+def test_render_without_the_rig_key_uses_a_placeholder(tmp_path, monkeypatch, capsys):
+    """CI has no secrets: the documents render with a placeholder key and the run says so."""
     from sandboxed_devenv import cli
 
     monkeypatch.setenv("SANDBOXED_DEVENV_HOME", str(tmp_path))
+    monkeypatch.setattr(render, "wheel_build_command", lambda out_dir: ["true"])
     status = cli.main(["render", "--out", str(tmp_path / "out")])
-    assert status == 1
-    assert "gw_ed25519.pub" in capsys.readouterr().err
+    assert status == 0
+    out = capsys.readouterr().out
+    assert "placeholder key" in out
+    user_data = (tmp_path / "out" / "host" / "cloudinit" / "user-data").read_text()
+    assert render.RIG_PUBKEY_PLACEHOLDER in user_data

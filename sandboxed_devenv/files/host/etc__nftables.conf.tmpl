@@ -12,7 +12,9 @@ flush ruleset
 
 define vm_subnet = @@VM_SUBNET@@
 define uplink = "@@UPLINK_INTERFACE@@"
-define sandbox_user = "@@SANDBOX_USER@@"
+# The uid of @@SANDBOX_USER@@, the client sandbox user; a name would be resolved when the
+# rules are parsed, which fails wherever the user does not exist (CI).
+define sandbox_uid = @@SANDBOX_UID@@
 
 table inet vmrouter {
   set backend_allowed {
@@ -33,7 +35,7 @@ table inet vmrouter {
   }
   chain output {
     type filter hook output priority filter; policy accept;
-    meta skuid != $sandbox_user accept
+    meta skuid != $sandbox_uid accept
     ct state established,related accept
     ip daddr $vm_subnet accept
     udp dport 53 accept
