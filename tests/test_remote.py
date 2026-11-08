@@ -84,6 +84,22 @@ def test_tool_runs_the_global_command_and_parses_json():
     assert runner.kwargs[0]["capture_output"] is True
 
 
+def test_tool_forwards_the_colour_setting_only_for_output_that_comes_back(monkeypatch):
+    runner = FakeRunner()
+    monkeypatch.setattr(common, "color_wanted", lambda stream=None: True)
+    make_remote(runner).tool(["connect", "ls"])
+    assert runner.commands[0][-1] == f"env {common.COLOR_ENV_VAR}=always {common.GLOBAL_COMMAND_PATH} connect ls"
+    make_remote(runner).tool(["connect", "ls"], sudo=True)
+    assert runner.commands[1][-1].startswith(f"sudo env {common.COLOR_ENV_VAR}=always ")
+    runner = FakeRunner([(0, "{}")])
+    make_remote(runner).tool(["backend", "status"], parse_json=True)
+    assert not runner.commands[0][-1].startswith("env ")
+    monkeypatch.setattr(common, "color_wanted", lambda stream=None: False)
+    runner = FakeRunner()
+    make_remote(runner).tool(["connect", "ls"])
+    assert runner.commands[0][-1] == f"{common.GLOBAL_COMMAND_PATH} connect ls"
+
+
 def test_tool_without_the_json_flag():
     runner = FakeRunner([(0, json.dumps({"created": True}))])
     result = make_remote(runner).tool(["backend", "repo", "rekey", "o/r"], parse_json=True, json_flag=False)

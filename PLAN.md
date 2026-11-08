@@ -560,7 +560,15 @@ Parity with today's rig, then the old scripts go.
       titles, left alone. Then `new m3test --repo jeffsw/sandboxed_devenv` registered its
       key and cloned by itself (ready in 19 s) and `rm m3test --yes` revoked the key before
       deleting the VM, with the audit clean afterwards apart from those two stale keys:
-      the GitHub half of the M3 gate, met 8 November.
+      the GitHub half of the M3 gate, met 8 November. Run again with Gateway closed: the
+      `sshConfigs.xml` entry written by `new`, the connection listed in Gateway and
+      opened, the entry removed by `rm`.
+- [ ] The Gateway entry while Gateway runs. Today `connect add` skips it, since Gateway
+      rewrites `sshConfigs.xml` from memory on exit, and prints what to do instead. To
+      try: the IDE platform reloads application-level option files changed on disk when
+      its window regains focus (StoreReloadManager), so writing the entry and letting the
+      user focus Gateway may be enough; else Gateway's host field can take the project's
+      alias from gw's `ssh_config` (`Host <project>`), which needs no entry at all.
 - [ ] Split the rig key in two. Today one pair, `secrets/gw_ed25519`, is both the control
       side's login to every VM (desk as `jsw`, backends as `dev`) and gw's key to the
       backends (`/home/gw/.ssh/vm_ed25519`). On the Mac rig desk's `jsw` account authorizes
@@ -607,6 +615,14 @@ Parity with today's rig, then the old scripts go.
       About, Markdown preview, clipboard both ways, Claude Code `/status`, git fetch
       without a key dialog, plugin install path. This is the part that stays manual.
 - [ ] `lint-doc` house rules extended to `PLAN.md`, `README.md` and `docs/`.
+- [ ] Warnings in bold yellow wherever a terminal shows them: `common.warning()` colours
+      the `connect add` and `connect rm` notices about a running Gateway (8 November,
+      asked for by the user), and the control side forwards the setting to a command it
+      runs on another machine (`SANDBOXED_DEVENV_COLOR=always` over SSH, since the far
+      side sees a pipe; `NO_COLOR` honoured). Extend it to the other warning-like lines:
+      a failed registration or `connect` in `new`, pending revocations in `rm` and `ls`,
+      the leftover build VM in `image build`, `resources` announcing a stop, unclaimed
+      keys in `creds audit`.
 - [x] Static verification in CI: schema, AppArmor and nftables parsers, shell, Python,
       YAML, workflow, doc rules and Mermaid rendering.
 
@@ -673,7 +689,7 @@ Written before the laptop arrives, first run on it.
 | M0 scaffold | `mise run verify` green with the package installed and one test | CI |
 | M1 client host | `desk` rebuilt from the slim template with the package installed; `sandboxed-devenv host check` 0 FAIL; Gateway via `client start`; preview and clipboard work | Mac |
 | M2 drivers and backend split | `sandboxed-devenv new` to a connected client on the Mac, the package installed in the backend; old scripts deleted. Status 8 November: `new` ready in 17 s with the connection written for gw on desk, gw's SSH to the backend proven, scripts deleted; left: a desk from `client-host new` and the connection opened in Gateway's window | Mac |
-| M3 credentials | `sandboxed-devenv new` and `sandboxed-devenv rm` need no manual GitHub or Gateway step. Status 8 November: the GitHub half met (`new --repo` registered and cloned, `rm` revoked); the Gateway entry is written only while Gateway is closed | Mac |
+| M3 credentials | `sandboxed-devenv new` and `sandboxed-devenv rm` need no manual GitHub or Gateway step. Met 8 November with Gateway closed during both: `new --repo` registered and cloned, its connection appeared in Gateway's list and worked, `rm` revoked the key and removed the entry. While Gateway runs the entry is not written and the command says so; making it survive a running Gateway is the open M3 item | Mac |
 | M4 testing | `mise run test-e2e` passes on the Mac unattended, versions matching on all three machines | Mac |
 | M5 Linux laptop | `sandboxed-devenv test end-to-end` passes on the laptop; first real project opened | Linux laptop |
 

@@ -197,6 +197,25 @@ def test_prepare_disk_needs_qemu_img_and_grows_the_file(tmp_path, monkeypatch):
     assert (tmp_path / "d.img").stat().st_size == 1 << 30
 
 
+def test_warning_colours_only_where_wanted(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv(common.COLOR_ENV_VAR, "always")
+    assert common.warning("careful") == f"{common.BOLD_YELLOW}careful{common.RESET}"
+    monkeypatch.setenv(common.COLOR_ENV_VAR, "never")
+    assert common.warning("careful") == "careful"
+    monkeypatch.delenv(common.COLOR_ENV_VAR)
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert common.color_wanted() is False
+    monkeypatch.delenv("NO_COLOR")
+
+    class Tty:
+        def isatty(self):
+            retval = True
+            return retval
+
+    assert common.warning("careful", Tty()).startswith(common.BOLD_YELLOW)
+
+
 def test_architecture_names_match_versions_yaml(monkeypatch):
     monkeypatch.setattr(common.platform, "machine", lambda: "arm64")
     assert common.architecture() == "aarch64"

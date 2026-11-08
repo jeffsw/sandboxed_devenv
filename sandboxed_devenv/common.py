@@ -7,6 +7,7 @@ import argparse
 import contextlib
 import dataclasses
 import importlib.metadata
+import os
 import platform
 import shlex
 import shutil
@@ -16,9 +17,34 @@ import time
 
 DIST_NAME = "sandboxed-devenv"
 COMMAND_NAME = "sandboxed-devenv"
+# `always`, `never` or unset (a terminal decides). The control side sets it to `always` for a
+# command it runs on another machine when its own output is a terminal, since the far side only
+# sees a pipe; older versions there ignore the variable. NO_COLOR is honoured.
+COLOR_ENV_VAR = "SANDBOXED_DEVENV_COLOR"
+BOLD_YELLOW = "\033[1;33m"
+RESET = "\033[0m"
 # Where `sudo pipx install --global` puts the command on Linux: inside sudo's secure_path and
 # readable by every user, so the client host's `sudo --user=gw` reaches it without PATH tricks.
 GLOBAL_COMMAND_PATH = "/usr/local/bin/sandboxed-devenv"
+
+
+def color_wanted(stream=None) -> bool:
+    """Whether to colour output: the environment's say, else whether the stream is a terminal."""
+    setting = os.environ.get(COLOR_ENV_VAR, "").lower()
+    if setting == "always":
+        retval = True
+    elif setting == "never" or os.environ.get("NO_COLOR"):
+        retval = False
+    else:
+        stream = stream or sys.stdout
+        retval = bool(getattr(stream, "isatty", lambda: False)())
+    return retval
+
+
+def warning(text: str, stream=None) -> str:
+    """A warning-like line in bold yellow where a terminal shows it, plain otherwise."""
+    retval = f"{BOLD_YELLOW}{text}{RESET}" if color_wanted(stream) else text
+    return retval
 
 
 def package_version() -> str:

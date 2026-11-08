@@ -121,6 +121,9 @@ class Remote:
         after adding ``--json`` to the command unless ``json_flag`` is off (for the `backend repo`
         commands, which print JSON and take no flag)."""
         remote_command = [self.command_path, *args]
+        if not parse_json and common.color_wanted(sys.stdout):
+            # The far side sees a pipe, not our terminal; tell it to colour its warnings anyway.
+            remote_command = ["env", f"{common.COLOR_ENV_VAR}=always", *remote_command]
         if sudo:
             remote_command = ["sudo", *remote_command]
         if parse_json:
