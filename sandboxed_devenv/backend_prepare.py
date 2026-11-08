@@ -516,6 +516,16 @@ def step_git_identity(ctx: Context) -> list[Outcome]:
     return retlist
 
 
+def step_project_dir(ctx: Context) -> list[Outcome]:
+    """``~dev/proj/<project>``, where the repositories are cloned and the IDE project opens; made
+    at first boot so Gateway has a directory to open before any repository is registered."""
+    path = ctx.paths.proj_dir / ctx.project.project
+    account = pwd.getpwnam(ctx.paths.user)
+    retlist = [outcome(ctx, f"directory {path}", "mkdir, owned by dev", not path.is_dir(),
+                       lambda: steps.ensure_parents(path / "placeholder", account.pw_uid, account.pw_gid), "present")]
+    return retlist
+
+
 def step_repositories(ctx: Context) -> list[Outcome]:
     """A key pair and stanza per listed repository, no clone: the keys get registered first."""
     retlist = []
@@ -547,7 +557,8 @@ def step_prepared_marker(ctx: Context) -> list[Outcome]:
 
 
 IMAGE_STEPS = [step_files, step_sshd, step_image_marker]
-PROJECT_STEPS = [step_files, step_sshd, step_github_host_keys, step_git_identity, step_repositories, step_prepared_marker]
+PROJECT_STEPS = [step_files, step_sshd, step_github_host_keys, step_git_identity, step_project_dir, step_repositories,
+                 step_prepared_marker]
 
 
 def cmd_prepare(args) -> int:

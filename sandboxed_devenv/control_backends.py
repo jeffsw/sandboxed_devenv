@@ -271,16 +271,26 @@ def client_connect(user_config: config.UserConfig, runner: common.Runner, argume
 
 
 def print_repositories(record: ProjectRecord) -> None:
-    """The deploy keys the backend minted, for `gh repo deploy-key add` by hand until M3."""
+    """The deploy keys the backend minted and the commands that register and clone each one, by
+    hand until M3: fetch the public key from the backend, `gh repo deploy-key add`, then
+    `backend repo add` inside the backend, which clones."""
+    unregistered = []
     for repository in record.repos:
-        if repository.public_key:
-            print(f"{record.project}: deploy key for {repository.name} ({repository.access}): {repository.public_key}")
-    unregistered = [repository.name for repository in record.repos if repository.state == control_inventory.UNREGISTERED]
-    if unregistered:
-        print(f"{record.project}: register each key on its repository (`gh repo deploy-key add KEYFILE --repo OWNER/REPO"
-              f"{' --allow-write' if any(r.access == 'write' for r in record.repos) else ''}`), then clone with "
-              f"`sandboxed-devenv ssh {record.project} -- sandboxed-devenv backend repo add OWNER/REPO`; "
-              "M3 automates both")
+        if repository.state == control_inventory.UNREGISTERED:
+            unregistered.append(repository)
+    if not unregistered:
+        return
+    print(f"{record.project}: {len(unregistered)} deploy key(s) to register by hand (M3 automates this):")
+    for repository in unregistered:
+        owner, repo = repository.name.split("/", 1)
+        key_file = f"/home/dev/.ssh/deploy_{owner}_{repo}.pub"
+        local_copy = f"{record.vm_name}-{owner}-{repo}.pub"
+        write = " --allow-write" if repository.access == "write" else ""
+        print(f"  {repository.name} ({repository.access}): {repository.public_key or 'key not reported'}")
+        print(f"    sandboxed-devenv ssh {record.project} -- cat {key_file} > {local_copy}")
+        print(f"    gh repo deploy-key add {local_copy} --repo {repository.name} --title {record.vm_name}{write}")
+        print(f"    sandboxed-devenv ssh {record.project} -- sandboxed-devenv backend repo add {repository.name}")
+    print(f"  then open /home/dev/proj/{record.project} in Gateway")
 
 
 def confirm(question: str, assume_yes: bool) -> bool:

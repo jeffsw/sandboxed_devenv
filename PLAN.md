@@ -437,7 +437,12 @@ Parity with today's rig, then the old scripts go.
       `resources` applied through UTM's configuration update and seen inside the guest
       (1 CPU, 3 GiB), `rm` of both with their connections gone from desk. One bug found
       by the first clone: the `backend repo` commands take no `--json` flag, so
-      `Remote.tool()` gained `json_flag`.
+      `Remote.tool()` gained `json_flag`. The gate run (a desk from `client-host new`,
+      `new sandboxed_devenv --repo jeffsw/sandboxed_devenv`, Gateway connected) found two
+      things: the project directory did not exist before the first clone, so Gateway had
+      nothing to open (`backend prepare` now makes `~dev/proj/<project>` at first boot),
+      and the registration hint now prints the fetch, `gh repo deploy-key add` and
+      `backend repo add` commands with the real names.
 - [x] `control_inventory.py` arrives with it (planned for M3): the project record with
       the backend side filled, and `repos` with the fingerprints and public keys the
       backend minted, state `unregistered` until M3 registers them.

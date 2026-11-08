@@ -245,7 +245,10 @@ def test_new_launches_records_and_connects(rig, capsys):
     assert record.repos[0].fingerprint is None  # the fake backend lists only what it was told about
     assert rig["client"].calls == [(("connect", "add", "m2test", "192.168.64.20", *HOST_KEYS), True)]
     assert "m2test ready: idesbx-m2test at 192.168.64.20" in out
-    assert "register each key" in out
+    assert "2 deploy key(s) to register by hand" in out
+    assert "gh repo deploy-key add idesbx-m2test-jeffsw-a.pub --repo jeffsw/a --title idesbx-m2test --allow-write" in out
+    assert "sandboxed-devenv ssh m2test -- cat /home/dev/.ssh/deploy_jeffsw_b.pub > idesbx-m2test-jeffsw-b.pub" in out
+    assert "backend repo add jeffsw/b" in out
     assert not list(config.images_dir().glob(".new-*"))
     assert cli.main(["new", "m2test"]) == 1
     assert "already in the inventory" in capsys.readouterr().err
