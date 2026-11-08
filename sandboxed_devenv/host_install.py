@@ -13,7 +13,6 @@ the plan instead of inspecting the host.
 """
 
 import dataclasses
-import grp
 import os
 import pathlib
 import platform
@@ -27,7 +26,10 @@ import tempfile
 import time
 import urllib.request
 
-from sandboxed_devenv import common, config, host_client, render
+from sandboxed_devenv import common, config, host_client, render, steps
+from sandboxed_devenv.steps import CHANGED, FAILED, UNCHANGED, WOULD_CHANGE, Outcome, outcome, read_text, run, sync_file
+
+COMMAND = "host install"
 
 GW_USER = host_client.GW_USER
 GW_HOME = host_client.GW_HOME
@@ -36,7 +38,7 @@ GATEWAY_DIR = host_client.GATEWAY_DIR
 # Written after unpacking, so the installed version is known whatever the tarball's own layout.
 GATEWAY_VERSION_FILE = GATEWAY_DIR / ".sandboxed-devenv-version"
 GATEWAY_VMOPTIONS = GATEWAY_DIR / "bin" / "gateway64.vmoptions"
-# Gateway 2026.2.2 ships no toolkit option; without this line it starts on X11 (8 October 2026).
+# Gateway 2026.2 ships no toolkit option; without this line it starts on X11 (8 October 2026).
 TOOLKIT_OPTION = "-Dawt.toolkit.name=auto"
 APPARMOR_PROFILE = pathlib.Path("/etc/apparmor.d/jetbrains-client")
 APPARMOR_PROFILE_NAME = "jetbrains-client"
@@ -49,31 +51,10 @@ LINGER_DIR = pathlib.Path("/var/lib/systemd/linger")
 # and its cookie. The desk cloud-init installs the same list so its first boot is one apt run.
 HOST_PACKAGES = ["acl", "nftables", "wl-clipboard", "xwayland-run", "xauth"]
 
-CHANGED = "changed"
-UNCHANGED = "unchanged"
-WOULD_CHANGE = "would change"
-FAILED = "failed"
-
 
 @dataclasses.dataclass
-class Context:
-    apply: bool
-    values: dict[str, str]
-    secrets_dir: pathlib.Path
-    changed: set = dataclasses.field(default_factory=set)
-
-
-@dataclasses.dataclass
-class Outcome:
-    label: str
-    status: str
-    detail: str = ""
-
-    def line(self) -> str:
-        retval = f"host install: {self.label}: {self.status}"
-        if self.detail:
-            retval += f" ({self.detail})"
-        return retval
+class Context(steps.Context):
+    secrets_dir: pathlib.Path = config.secrets_dir()
 
 
 def register(subparsers):
@@ -90,36 +71,6 @@ def register(subparsers):
     check.set_defaults(handler=cmd_check)
 
 
-def run(command: list[str], **kwargs) -> subprocess.CompletedProcess:
-    retval = subprocess.run(command, text=True, **kwargs)
-    return retval
-
-
-def outcome(ctx: Context, label: str, detail: str, differs: bool, action, unchanged_detail: str = "") -> Outcome:
-    """The shape of every step: nothing differs, unchanged; differs without apply, would change; with
-    apply, run the action and report changed, or failed with the error."""
-    if not differs:
-        retval = Outcome(label, UNCHANGED, unchanged_detail)
-    elif not ctx.apply:
-        retval = Outcome(label, WOULD_CHANGE, detail)
-    else:
-        try:
-            action()
-            retval = Outcome(label, CHANGED, detail)
-        except (OSError, subprocess.CalledProcessError) as error:
-            retval = Outcome(label, FAILED, f"{detail}: {error}")
-    return retval
-
-
-def read_text(path: pathlib.Path) -> str | None:
-    retval = None
-    try:
-        retval = path.read_text()
-    except OSError:
-        pass
-    return retval
-
-
 # --- steps ----------------------------------------------------------------------------------
 
 
@@ -131,7 +82,7 @@ def dpkg_installed(name: str) -> bool:
 
 def apt_install(names: list[str]) -> None:
     environment = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
-    print(f"host install: packages: apt-get install {' '.join(names)}, which takes a moment", flush=True)
+    print(f"{COMMAND}: packages: apt-get install {' '.join(names)}, which takes a moment", flush=True)
     run(["apt-get", "install", "--yes", "--no-install-recommends", *names], env=environment, check=True)
 
 
@@ -184,62 +135,6 @@ def step_linger(ctx: Context) -> list[Outcome]:
                        f"/run/user/<uid> at boot without a login", not marker.exists(),
                        lambda: run(["loginctl", "enable-linger", GW_USER], check=True), "enabled")]
     return retlist
-
-
-def ensure_parents(dest: pathlib.Path, uid: int, gid: int) -> None:
-    """Missing parent directories, owned like the file; `.ssh` closed, the rest world-readable."""
-    missing = []
-    parent = dest.parent
-    while not parent.exists():
-        missing.append(parent)
-        parent = parent.parent
-    for directory in reversed(missing):
-        directory.mkdir()
-        os.chown(directory, uid, gid)
-        directory.chmod(0o700 if directory.name == ".ssh" else 0o755)
-
-
-def sync_file(dest: pathlib.Path, content: bytes, owner: str, group: str, mode: int, apply: bool) -> Outcome:
-    """Content, owner, group and mode as given, written atomically; reports what differed."""
-    label = f"file {dest}"
-    try:
-        uid = pwd.getpwnam(owner).pw_uid
-        gid = grp.getgrnam(group).gr_gid
-    except KeyError as error:
-        if apply:
-            retval = Outcome(label, FAILED, f"no such user or group: {error}")
-        else:
-            retval = Outcome(label, WOULD_CHANGE, f"created once {owner}:{group} exist")
-        return retval
-    differences = []
-    if not dest.exists():
-        differences.append("created")
-    else:
-        status = dest.stat()
-        if dest.read_bytes() != content:
-            differences.append("content")
-        if (status.st_uid, status.st_gid) != (uid, gid):
-            differences.append("owner")
-        if stat.S_IMODE(status.st_mode) != mode:
-            differences.append("mode")
-    if not differences:
-        retval = Outcome(label, UNCHANGED, f"{owner}:{group} {mode:04o}")
-        return retval
-    detail = ", ".join(differences)
-    if not apply:
-        retval = Outcome(label, WOULD_CHANGE, detail)
-        return retval
-    try:
-        ensure_parents(dest, uid, gid)
-        temporary = dest.with_name(f".{dest.name}.sandboxed-devenv.tmp")
-        temporary.write_bytes(content)
-        os.chown(temporary, uid, gid)
-        temporary.chmod(mode)
-        os.replace(temporary, dest)
-        retval = Outcome(label, CHANGED, detail)
-    except OSError as error:
-        retval = Outcome(label, FAILED, f"{detail}: {error}")
-    return retval
 
 
 def step_files(ctx: Context) -> list[Outcome]:
@@ -327,7 +222,7 @@ def gateway_url(version: str) -> str:
 
 def install_gateway(version: str) -> None:
     url = gateway_url(version)
-    print(f"host install: gateway: downloading {url} and unpacking it under {GATEWAY_DIR}; "
+    print(f"{COMMAND}: gateway: downloading {url} and unpacking it under {GATEWAY_DIR}; "
           "the launcher is several hundred MB, so this takes minutes", flush=True)
     started = time.monotonic()
     with tempfile.NamedTemporaryFile(dir=GW_HOME, prefix=".gateway-", suffix=".tar.gz", delete=False) as archive:
@@ -343,7 +238,7 @@ def install_gateway(version: str) -> None:
         os.unlink(archive.name)
     GATEWAY_VERSION_FILE.write_text(f"{version}\n")
     run(["chown", "--recursive", f"{GW_USER}:{GW_USER}", str(GATEWAY_DIR)], check=True)
-    print(f"host install: gateway: unpacked in {time.monotonic() - started:.0f} s", flush=True)
+    print(f"{COMMAND}: gateway: unpacked in {time.monotonic() - started:.0f} s", flush=True)
 
 
 def append_toolkit_option() -> None:
@@ -423,21 +318,16 @@ def cmd_install(args) -> int:
         print("sandboxed-devenv: `host install` needs root: sudo sandboxed-devenv host install", file=sys.stderr)
         retval = 1
         return retval
-    ctx = Context(apply=not (args.dry_run or args.check), values=values, secrets_dir=secrets_dir)
-    counts = {CHANGED: 0, UNCHANGED: 0, WOULD_CHANGE: 0, FAILED: 0}
+    ctx = Context(apply=not (args.dry_run or args.check), values=values, command=COMMAND, secrets_dir=secrets_dir)
+    outcomes = []
     for step in STEPS:
         for result in step(ctx):
-            counts[result.status] += 1
-            print(result.line(), flush=True)
+            outcomes.append(result)
+            print(result.line(COMMAND), flush=True)
+    counts = steps.tally(outcomes)
     mode = "check" if args.check else "dry run" if args.dry_run else "install"
-    print(f"host install: {mode}: {counts[CHANGED]} changed, {counts[UNCHANGED]} unchanged, "
-          f"{counts[WOULD_CHANGE]} would change, {counts[FAILED]} failed")
-    if counts[FAILED]:
-        retval = 1
-    elif args.check and counts[WOULD_CHANGE]:
-        retval = 1
-    else:
-        retval = 0
+    print(steps.summary_line(COMMAND, mode, counts))
+    retval = steps.exit_status(counts, args.check)
     return retval
 
 

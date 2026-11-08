@@ -4,7 +4,8 @@
 set -euo pipefail
 cd "$MISE_PROJECT_ROOT"
 yamllint --strict --config-file .yamllint.yaml \
-    sandboxed_devenv/files/manifest.yaml \
+    sandboxed_devenv/files/manifest.yaml sandboxed_devenv/versions.yaml \
+    build/host/cloudinit build/backend/cloudinit build/backend/cloudinit-image build/backend/cloudinit-project \
     rehearsal/utm/build/desk-seed rehearsal/utm/build/backend-seed \
     rehearsal/utm/desk/meta-data rehearsal/utm/desk/network-config \
     rehearsal/utm/backend/meta-data rehearsal/utm/backend/network-config \

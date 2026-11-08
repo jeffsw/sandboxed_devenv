@@ -1,0 +1,20 @@
+# sandboxed-devenv backend: cloud-init network-config for a backend on UTM's shared network
+# Static address from the pool in config.yaml. Rendered through systemd-networkd: with
+# NetworkManager the dracut initramfs's catch-all DHCP rule wins the NIC first (seen on
+# desk, 9 October 2026). The netplan match is the exact NIC name, not a glob. UTM's shared
+# network marks each VM's port on the Mac's bridge "private", so the VMs cannot reach each
+# other directly; the Mac forwards, hence the host route to the client host. Incus backends
+# take DHCP from their bridge and get no network-config.
+version: 2
+renderer: networkd
+ethernets:
+  @@INTERFACE@@:
+    dhcp4: false
+    addresses: [@@ADDRESS@@/@@PREFIX_LENGTH@@]
+    routes:
+      - to: default
+        via: @@GATEWAY@@
+      - to: @@CLIENT_HOST_ADDRESS@@/32
+        via: @@GATEWAY@@
+    nameservers:
+      addresses: [@@NAMESERVER@@]

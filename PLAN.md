@@ -116,6 +116,7 @@ sandboxed_devenv/
   doctor.py                      doctor: roles this machine can play, drivers found, ~/.sandboxed_devenv
   config.py                      user config + versions + policy models (pydantic), YAML readers
   render.py                      template rendering and the wheel build, no side effects
+  steps.py                       idempotent steps shared by host install and backend prepare: outcomes, atomic file sync
   canary.py                      stdlib-only probes; the `canary` subcommand; runnable with python3 -m
   remote.py                      runs the command on the client host or a backend over SSH, parses --json
   control_driver.py              the Driver protocol
@@ -146,13 +147,13 @@ sandboxed_devenv/
       etc__ssh__sshd_config.d__10-backend.conf
       home__dev__.ssh__config.ssh_config
       home__dev__.claude__settings.json.tmpl
+  versions.yaml                  Gateway, IDE backend, client, Ubuntu image serial; package data, so every install carries its pins
 tests/                           pytest, one test module per package module, as in rpkilog
 ci/                              puppeteer config for the Mermaid check (from rehearsal/ci/)
 docs/
   runbook.md                     install, new project, dispose, rotate, troubleshoot
   linux-laptop-install.md        the laptop's first day, step by step
 policy.yaml                      egress allowlists and the VM subnet
-versions.yaml                    Gateway, IDE backend, client, Ubuntu image serial, tool versions
 ```
 
 `rehearsal/` goes away: its scripts are replaced by the package and deleted once M2
@@ -345,15 +346,15 @@ Parity with today's rig, then the old scripts go.
 - [ ] `control_driver_utm.py`: port `create-vms.sh` (AppleScript create, plutil for
       keyboard, pointer and clipboard, the UTM relaunch) and `make-seed.sh` (hdiutil
       ISO). Keep the documented UTM 4.7.5 quirks as comments with dates.
-- [ ] `versions.yaml`: Gateway, IDE backend, client build, Ubuntu release and image
+- [x] `versions.yaml`: Gateway, IDE backend, client build, Ubuntu release and image
       serial, architecture-specific download URLs keyed by `aarch64` and `x86_64`.
       `render.py` reads it; nothing else carries a version string.
-- [ ] `config.yaml` model in `config.py`: `client_host`, `vm_name_prefix`, backend
+- [x] `config.yaml` model in `config.py`: `client_host`, `vm_name_prefix`, backend
       defaults (`cpus: 4`, `memory_gib: 8`, `disk_gib: 32`), and the UTM address pool
       (`192.168.64.20` upward; `.1` is the Mac, `.10` is `desk`), and `incus_storage_dir`,
       the directory of the Incus `dir` pool (default: Incus's own). Each backend's
       address, CPUs and memory are recorded in the inventory when it is created.
-- [ ] Split `rehearsal/utm/backend/user-data.tmpl` into
+- [x] Split `rehearsal/utm/backend/user-data.tmpl` into
       `files/backend/cloudinit-image__user-data.yaml.tmpl` (packages including `pipx`,
       `gh` apt source, IDE tarball and `registerBackendLocationForGateway`, plugin
       pre-install, tools, `mise` and `direnv` hooks; the package and `backend prepare
@@ -364,10 +365,15 @@ Parity with today's rig, then the old scripts go.
       own files (the sshd hardening, `dev`'s `ssh_config`, Claude's `settings.json`) move
       to `files/backend/` with a `stage` in the manifest, and both stages deploy them with
       the same routine `host install` uses.
-- [ ] `backend_prepare.py`: `backend prepare` does what the project cloud-init's
+- [x] `backend_prepare.py`: `backend prepare` does what the project cloud-init's
       `runcmd` does today (GitHub host keys from `api.github.com/meta`, git identity,
       Claude `settings.json`, `IdentityAgent none`, then `backend repo add` for each
-      listed repository) and is idempotent; `backend status --json` reports cloud-init
+      listed repository, minting keys without cloning, since the control side registers
+      them first) and is idempotent, with `--check`; dev's `ssh_config` includes one
+      stanza file per repository from `~/.ssh/config.d/`; the world-readable
+      `prepared.yaml` carries the project name for `dev`, since `project.yaml` holds
+      the token and is root-only. Proven on the rig's backend on 7 November: both
+      stages applied, then 0 would change; `backend status --json` reports cloud-init
       state, the IDE backend registration, the package version, the repositories with
       their key fingerprints and the SSH host public keys; `backend repo add / rm / rekey
       / ls` as described under "Projects and repositories".
@@ -576,8 +582,9 @@ daily machine, which is the reason the UTM driver is kept rather than retired.
       failures visible only on the serial console), and `incus file push` (a second
       path for one driver when SSH serves both).
 - [x] **Binding a key to its repository inside the VM.** Decided 7 November: an alias
-      stanza per repository in `dev`'s `ssh_config` (`Host github.com-<owner>-<repo>`,
-      `IdentitiesOnly yes`), written by `backend repo add`, with the checkout's remote
+      stanza per repository (`Host github.com-<owner>-<repo>`, `IdentitiesOnly yes`), one
+      file each under `dev`'s `~/.ssh/config.d/` which `ssh_config` includes, written by
+      `backend repo add`, with the checkout's remote
       pointing at the alias; it works for any git command from any directory. Rejected:
       `core.sshCommand` set per checkout, which keeps plain URLs but applies only inside
       that checkout, so submodules and fresh clones miss it.

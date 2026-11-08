@@ -1,0 +1,31 @@
+#cloud-config
+# sandboxed-devenv backend: cloud-init user-data for a project's backend
+# The first boot of a VM cloned from the base image: its name, the rig key again, and
+# /etc/sandboxed-devenv/project.yaml with the project's repositories, git identity and
+# Claude token, then `sandboxed-devenv backend prepare` from the package the image carries.
+# `backend status --json` reports `ready` once prepare is done; the control side polls it.
+
+hostname: @@HOSTNAME@@
+manage_etc_hosts: true
+
+users:
+  - name: dev
+    gecos: Development user (the untrusted side)
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: true
+    ssh_authorized_keys:
+      - @@RIG_PUBKEY@@
+
+write_files:
+  # Root only: it carries the Claude token until prepare moves that into dev's settings.
+  - path: /etc/sandboxed-devenv/project.yaml
+    permissions: "0600"
+    encoding: b64
+    content: @@PROJECT_YAML_B64@@
+
+runcmd:
+  - /usr/local/bin/sandboxed-devenv backend prepare --stage project
+
+final_message: "@@HOSTNAME@@: cloud-init finished after $UPTIME seconds"

@@ -59,3 +59,50 @@ host:
     description: >-
       Gateway's SSH connection to the backend, as Gateway 2026.2 wrote it after the first
       connection was made in its window, so a fresh client host starts with it present.
+backend:
+  cloudinit-image__user-data.yaml.tmpl:
+    dest: ~
+    template: true
+    description: >-
+      The base image's one boot under `image build`: packages, the gh apt source, the IDE
+      backend registered for Gateway, plugins, tools, the dev user with the rig key.
+  cloudinit-project__user-data.yaml.tmpl:
+    dest: ~
+    template: true
+    description: >-
+      A project's backend at first boot: hostname, the rig key, project.yaml with the
+      repositories, git identity and Claude token, then `backend prepare`.
+  cloudinit__network-config.yaml.tmpl:
+    dest: ~
+    template: true
+    description: >-
+      A static address from the pool on UTM's shared network, with the host route to the
+      client host; Incus backends use DHCP and get none.
+  etc__ssh__sshd_config.d__10-backend.conf:
+    dest: /etc/ssh/sshd_config.d/10-backend.conf
+    owner: root
+    group: root
+    mode: "0644"
+    template: false
+    stage: image
+    description: Keys only and no agent forwarding into the VM.
+  home__dev__.ssh__config.ssh_config:
+    dest: /home/dev/.ssh/config
+    owner: dev
+    group: dev
+    mode: "0600"
+    template: false
+    stage: image
+    description: >-
+      Includes one alias stanza per repository from config.d/ and refuses any SSH agent,
+      so the IDE's proxied agent never reaches git.
+  home__dev__.claude__settings.json.tmpl:
+    dest: /home/dev/.claude/settings.json
+    owner: dev
+    group: dev
+    mode: "0600"
+    template: true
+    stage: project
+    description: >-
+      Claude Code's settings with the project's token in the env block when the control
+      machine provided one; without it Claude Code asks to log in.

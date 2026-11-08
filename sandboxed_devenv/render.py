@@ -4,11 +4,14 @@ Also the package's view of ``files/`` (PLAN.md, "Files and templates"): the mani
 rule and the ``@@NAME@@`` fill, which `host install` and, from M2, the drivers use to put each
 file where it goes. Rendering has no side effects beyond the output directory.
 
-Until M2 brings ``versions.yaml``, ``policy.yaml`` and the user config, the values the templates
-take come from the defaults below and the same environment variables the rehearsal rig used
-(``GATEWAY_VERSION``, ``BACKEND_ADDRESS``, ``UPLINK_INTERFACE``, ``DESK_PASSWORD``).
+The values the templates take come from ``versions.yaml`` (every pinned version), the user
+config (addresses, the VM name prefix) and, per project, ``project_values()``. Until
+``policy.yaml`` arrives, the backend address, the uplink interface and the desk password keep
+the rig's environment overrides (``BACKEND_ADDRESS``, ``UPLINK_INTERFACE``, ``DESK_PASSWORD``).
 """
 
+import base64
+import json
 import os
 import pathlib
 import re
@@ -29,12 +32,10 @@ TEMPLATE_SUFFIX = ".tmpl"
 CLOUDINIT_FORMAT_SUFFIX = ".yaml"
 PLACEHOLDER = re.compile(r"@@([A-Z][A-Z0-9_]*)@@")
 
-DEFAULT_GATEWAY_VERSION = "2026.2.2"
-# The rehearsal backend on the Mac rig; M2 replaces the single address with the VM subnet.
-DEFAULT_BACKEND_ADDRESS = "192.168.64.20"
 # UTM's Apple-backend NIC on desk; the Linux laptop names its own.
 DEFAULT_UPLINK_INTERFACE = "en*"
 DEFAULT_DESK_PASSWORD = "rehearsal"
+SAMPLE_PROJECT = "sample"
 
 
 class RenderError(Exception):
@@ -125,18 +126,68 @@ def fill(text: str, values: dict[str, str], where: str) -> str:
     return retval
 
 
-def default_values(**overrides: str) -> dict[str, str]:
-    """Every value the templates may use; secrets (``RIG_PUBKEY``) only as overrides."""
-    gateway_version = os.environ.get("GATEWAY_VERSION", DEFAULT_GATEWAY_VERSION)
+def default_values(user_config: config.UserConfig | None = None, **overrides: str) -> dict[str, str]:
+    """Every value the templates may use that is not specific to one project: the pinned versions,
+    the addresses from the user config, and secrets (``RIG_PUBKEY``) only as overrides."""
+    versions = config.load_versions()
+    if user_config is None:
+        user_config = config.load_user_config()
+    utm = user_config.utm
     retdict = {
-        "GATEWAY_VERSION": gateway_version,
+        "GATEWAY_VERSION": versions.gateway.version,
         # Gateway keeps its settings under ~/.config/JetBrains/JetBrainsGateway<major.minor>/
-        "GATEWAY_BRANCH": ".".join(gateway_version.split(".")[:2]),
-        "BACKEND_ADDRESS": os.environ.get("BACKEND_ADDRESS", DEFAULT_BACKEND_ADDRESS),
+        "GATEWAY_BRANCH": versions.gateway.branch,
+        "IDE_BACKEND_VERSION": versions.ide_backend.version,
+        "IDE_BACKEND_URL_AARCH64": versions.ide_backend.url("aarch64"),
+        "IDE_BACKEND_URL_X86_64": versions.ide_backend.url("x86_64"),
+        "IDE_PLUGINS": " ".join(versions.ide_backend.plugins),
+        # The client host's view of the backends; M2's policy.yaml widens this to the subnet.
+        "BACKEND_ADDRESS": os.environ.get("BACKEND_ADDRESS", utm.address_pool_start),
         "UPLINK_INTERFACE": os.environ.get("UPLINK_INTERFACE", DEFAULT_UPLINK_INTERFACE),
         "DESK_PASSWORD": os.environ.get("DESK_PASSWORD", DEFAULT_DESK_PASSWORD),
+        # A backend's network-config on UTM; `new` adds ADDRESS from the pool.
+        "INTERFACE": utm.interface,
+        "PREFIX_LENGTH": utm.subnet.split("/")[1],
+        "GATEWAY": utm.gateway,
+        "NAMESERVER": utm.nameserver,
+        "CLIENT_HOST_ADDRESS": utm.client_host_address,
     }
     retdict.update(overrides)
+    return retdict
+
+
+def project_values(project: config.ProjectConfig, hostname: str, address: str | None = None) -> dict[str, str]:
+    """What one project's backend documents need: its name, project.yaml for cloud-init to write,
+    Claude's env block, and on UTM its static address."""
+    if project.claude_oauth_token:
+        env = {"CLAUDE_CODE_OAUTH_TOKEN": project.claude_oauth_token}
+    else:
+        env = {}
+    retdict = {
+        "HOSTNAME": hostname,
+        "PROJECT_YAML_B64": base64.b64encode(project.to_yaml().encode()).decode(),
+        "CLAUDE_ENV_JSON": json.dumps(env),
+    }
+    if address is not None:
+        retdict["ADDRESS"] = address
+    return retdict
+
+
+def sample_project() -> config.ProjectConfig:
+    """A project with no secrets, so `render` and CI can render the project stage."""
+    retval = config.ProjectConfig(
+        project=SAMPLE_PROJECT,
+        repositories=[config.Repository(name="example/repository")],
+        git=config.GitIdentity(user_name="Developer", user_email="developer@example.invalid"),
+    )
+    return retval
+
+
+def sample_values(**overrides: str) -> dict[str, str]:
+    """Defaults plus the sample project, for `render` and the tests."""
+    user_config = config.load_user_config()
+    retdict = default_values(user_config, **overrides)
+    retdict.update(project_values(sample_project(), user_config.vm_name(SAMPLE_PROJECT), user_config.utm.address_pool_start))
     return retdict
 
 
@@ -223,7 +274,7 @@ def cmd_render(args) -> int:
     command = wheel_build_command(out_dir)
     if args.dry_run:
         key_state = "present" if pubkey else "absent, so the real run would stop"
-        print(f"would render files/host under {out_dir / 'host'} (rig key {key_file}: {key_state})")
+        print(f"would render files/host and files/backend under {out_dir} (rig key {key_file}: {key_state})")
         print(f"would run in {checkout}: {shlex.join(command)}")
         retval = 0
         return retval
@@ -232,14 +283,15 @@ def cmd_render(args) -> int:
               file=sys.stderr)
         retval = 1
         return retval
-    values = default_values(RIG_PUBKEY=pubkey)
-    try:
-        written = render_role("host", values, out_dir)
-    except RenderError as error:
-        print(f"sandboxed-devenv render: {error}", file=sys.stderr)
-        retval = 1
-        return retval
-    print(f"render: {len(written)} host files under {out_dir / 'host'}")
+    values = sample_values(RIG_PUBKEY=pubkey)
+    for role in ROLES:
+        try:
+            written = render_role(role, values, out_dir)
+        except RenderError as error:
+            print(f"sandboxed-devenv render: {error}", file=sys.stderr)
+            retval = 1
+            return retval
+        print(f"render: {len(written)} {role} files under {out_dir / role}")
     out_dir.mkdir(parents=True, exist_ok=True)
     completed = subprocess.run(command, cwd=checkout)
     if completed.returncode != 0:
