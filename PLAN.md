@@ -431,7 +431,13 @@ Parity with today's rig, then the old scripts go.
       VM the inventory never saw). The inventory record is saved before the VM starts, so
       a failed `new` leaves something `rm` cleans up. `clone` exports the source's disk
       (stopped for the copy, with a question first) and launches it with a new seed and
-      instance id, then rekeys every repository. Done 8 November.
+      instance id, then rekeys every repository. Run on the Mac on 8 November against the
+      base image of that morning: `new` ready in 17 s (import 0 s, SSH after 5 s, prepare
+      11 s), `clone` in 9 s with a different key fingerprint in the copy, `stop` in 2 s,
+      `resources` applied through UTM's configuration update and seen inside the guest
+      (1 CPU, 3 GiB), `rm` of both with their connections gone from desk. One bug found
+      by the first clone: the `backend repo` commands take no `--json` flag, so
+      `Remote.tool()` gained `json_flag`.
 - [x] `control_inventory.py` arrives with it (planned for M3): the project record with
       the backend side filled, and `repos` with the fingerprints and public keys the
       backend minted, state `unregistered` until M3 registers them.
@@ -444,8 +450,11 @@ Parity with today's rig, then the old scripts go.
 - [x] Routing on `desk` for several backends: the desk network-config
       (`files/host/cloudinit__network-config.yaml.tmpl`, moved into the package) carries
       two `/25` routes via the Mac, more specific than the on-link `/24`, so every
-      backend is reachable without a per-backend change. Written 8 November; verified on
-      a desk built by `client-host new`, see the gate. The fallback would be a `/32` per
+      backend is reachable without a per-backend change. Written 8 November and
+      verified the same day with the two routes added live on the existing desk: gw
+      reached a backend at `.21` through its `connect` stanza, with the pinned key and no
+      prompt. A desk built by `client-host new` carries them from its first boot; that
+      build is the one step of M2 not yet run (below). The fallback would be a `/32` per
       backend added by `connect add`.
 - [x] `sandboxed-devenv resources PROJECT`: show or change a backend's CPUs and memory
       after creation. UTM: shows what the bundle's `config.plist` says and changes it
@@ -469,7 +478,11 @@ Parity with today's rig, then the old scripts go.
       `rehearsal/` could go. The desk VM is `<vm_name_prefix>desk`, the login the user in
       `client_host`, the address `utm.client_host_address`; the rig key pair goes into
       the host user's secrets directory on desk, as the script did, because it is gw's
-      key to the backends. Written 8 November; its first real run is the gate below.
+      key to the backends. Written and dry-run on 8 November; not yet run for real: a VM
+      with a display needs the UTM relaunch for its input devices (4.7.5 has no reload
+      command), which must happen with no VM running, and the existing desk and the old
+      rehearsal backend were up. First real run: `sandboxed-devenv client-host new
+      --replace` with every VM stopped, then the Gateway connection of the gate.
 - [x] `policy.yaml`: client egress (VM subnet, JetBrains download and account hosts),
       backend egress (GitHub, package indexes, Anthropic), the VM subnet, the uplink
       interface and an `enforce` switch; package data beside `versions.yaml`, with
@@ -598,7 +611,10 @@ Written before the laptop arrives, first run on it.
       `sandboxed-devenv image build`, `sandboxed-devenv ls` shows which backends run an
       older image or package; `sandboxed-devenv upgrade PROJECT` recreates from the new
       image with the same credentials policy, or pushes the new wheel and reinstalls when
-      only the package changed.
+      only the package changed. Noted 8 November: the rebuild decision compares versions
+      and the rendered cloud-init, so a code change without a version bump leaves the
+      image and every backend on the old code until `image build --force`; a digest of
+      the wheel in the record would catch it.
 - [ ] Cloud and service CLIs per project (`aws`, Linode, Terraform) and their scoped
       credentials, the open question in the summary.
 - [ ] Section 5 hardening on the host: the 1Password agent allowlist, nothing
@@ -614,7 +630,7 @@ Written before the laptop arrives, first run on it.
 |---|---|---|
 | M0 scaffold | `mise run verify` green with the package installed and one test | CI |
 | M1 client host | `desk` rebuilt from the slim template with the package installed; `sandboxed-devenv host check` 0 FAIL; Gateway via `client start`; preview and clipboard work | Mac |
-| M2 drivers and backend split | `sandboxed-devenv new` to a connected client on the Mac, the package installed in the backend; old scripts deleted. Status 8 November: see the M2 items | Mac |
+| M2 drivers and backend split | `sandboxed-devenv new` to a connected client on the Mac, the package installed in the backend; old scripts deleted. Status 8 November: `new` ready in 17 s with the connection written for gw on desk, gw's SSH to the backend proven, scripts deleted; left: a desk from `client-host new` and the connection opened in Gateway's window | Mac |
 | M3 credentials | `sandboxed-devenv new` and `sandboxed-devenv rm` need no manual GitHub or Gateway step | Mac |
 | M4 testing | `mise run test-e2e` passes on the Mac unattended, versions matching on all three machines | Mac |
 | M5 Linux laptop | `sandboxed-devenv test end-to-end` passes on the laptop; first real project opened | Linux laptop |
