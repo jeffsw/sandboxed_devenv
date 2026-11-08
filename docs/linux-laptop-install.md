@@ -1,15 +1,16 @@
-# The Linux laptop, day one
+# A Linux machine, day one
 
-The steps that take a fresh Framework Laptop 13 Pro from the box to the first project opened
-in a sandboxed IDE, with the laptop as the control machine and its own client host and Incus
-driving the backend VMs (PLAN.md, M5). Written before the laptop arrived; the items marked "to
-confirm" are what its first run settles.
+The steps from a fresh Linux install to the first project opened in a sandboxed IDE, on a
+machine that plays every role itself: the control side, the client host where the IDE's thin
+client runs in its sandbox, and the hypervisor, Incus, for the backend VMs (PLAN.md, M5). A
+laptop is the usual case, but nothing here depends on the hardware. The items marked "to
+confirm" have not been exercised on Incus yet and are what a first run settles.
 
 Four stages, each a section below:
 
 ```mermaid
 flowchart LR
-  os["1. The operating system<br/>Ubuntu 26.04, full-disk encryption,<br/>GNOME on Wayland, your login as the development user"]
+  os["1. The operating system<br/>Ubuntu 26.04, GNOME on Wayland,<br/>your login as the development user"]
   pkgs["2. Packages<br/>incus, pipx, gh, git, xorriso;<br/>incus-admin, incus admin init, the sudoers rule"]
   tool["3. sandboxed-devenv<br/>the package and its configuration;<br/>sudo sandboxed-devenv host install;<br/>sandboxed-devenv image build"]
   first["4. The first project<br/>sandboxed-devenv new, Gateway from client start,<br/>test host, test backend, test-e2e"]
@@ -18,14 +19,16 @@ flowchart LR
 
 ## 1. The operating system
 
-1. Ubuntu 26.04 (what Framework certifies for the 13 Pro, and the release the VMs run, so the
-   AppArmor profiles, pipx 1.8.0 and the kernel match). Full-disk encryption. No separate
-   volume: the Incus pool is a directory on the root filesystem, so only free space matters,
-   and the filesystem type does not (PLAN.md, "Incus storage").
+1. Ubuntu 26.04, the release the VMs run, so the AppArmor profiles, pipx and the kernel
+   features the sandbox relies on are the same on both sides. Other distributions are not
+   tested. Any disk layout will do: the Incus pool is a directory on an existing filesystem,
+   so only free space matters, and the filesystem type does not (PLAN.md, "Incus storage").
+   Count on about 10 GB for the base image and the downloaded cloud image, plus whatever each
+   backend grows to.
 2. Your login is the development user. Credentials that have nothing to do with development
    stay out of it, in another user or a VM (summary, section 5).
-3. The desktop session is GNOME on Wayland (the default). The client sandbox needs the Wayland
-   socket and nothing else.
+3. The desktop session is GNOME on Wayland, Ubuntu's default. The client sandbox needs the
+   Wayland socket and nothing else; an X11 session will not do.
 
 ## 2. Packages
 
@@ -68,7 +71,7 @@ YAML
 cp ~/proj/ide_sandbox/sandboxed_devenv/sandboxed_devenv/policy.yaml ~/.sandboxed_devenv/policy.yaml
 ```
 
-Edit the copied `policy.yaml`: `uplink_interface` is the laptop's interface toward the
+Edit the copied `policy.yaml`: `uplink_interface` is the machine's interface toward the
 Internet (`ip route show default` names it); `vm_subnet` is `incusbr0`'s subnet
 (`incus network get incusbr0 ipv4.address`, without the host part). Leave `enforce: false`
 until the ruleset has been watched working. Then:
@@ -78,8 +81,9 @@ claude setup-token > /dev/null            # paste the token into ~/.sandboxed_de
 sandboxed-devenv doctor
 ```
 
-The token can also be the Mac's: copy `~/.sandboxed_devenv/secrets/claude_oauth_token` over
-with `scp`, mode 0600. The key pairs are not copied; the laptop mints its own.
+The token can also come from another machine that already has one: copy
+`~/.sandboxed_devenv/secrets/claude_oauth_token` over with `scp`, mode 0600. The key pairs are
+not copied; each control machine mints its own.
 
 `doctor` should say control: yes (incus), client host: not provisioned, the secrets and the
 GitHub login.
@@ -95,8 +99,8 @@ not enabled), the Gateway launcher, the sandbox key as gw's, and the Incus pool.
 in, then in the GNOME session `sandboxed-devenv client start` runs Gateway as `gw`, and
 `sandboxed-devenv host check` runs the canary there (expect 0 FAIL).
 
-To confirm: the AppArmor profiles load on the laptop's kernel and the client's embedded
-browser works under Ubuntu's user-namespace restriction, as they do on desk.
+To confirm: the AppArmor profiles load and the client's embedded browser works under Ubuntu's
+user-namespace restriction, as they do on the Mac rig's desk VM.
 
 ### The base image
 
@@ -125,8 +129,8 @@ Record the timings in the summary (step 6 of 4.9).
 
 ## Differences from the Mac rig
 
-- No desk: the laptop is the client host, so `client-host` commands refuse to run and `connect
-  add` writes gw's files locally through `sudo`.
+- No desk: the machine is its own client host, so `client-host` commands refuse to run and
+  `connect add` writes gw's files locally through `sudo`.
 - Backends take DHCP from `incusbr0` with a static lease; the seed carries no network-config
   and there are no half-subnet routes.
 - A clone is a full copy on a `dir` pool (no reflinks on ext4), reported as a slow step.
