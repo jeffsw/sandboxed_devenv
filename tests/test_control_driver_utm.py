@@ -196,11 +196,15 @@ def test_available_off_macos(monkeypatch):
     assert "macOS" in control_driver_utm.UtmDriver(runner=FakeRunner()).available()
 
 
-def test_load_driver_on_linux_points_at_m5(monkeypatch):
-    monkeypatch.setattr(control_driver.platform, "system", lambda: "Linux")
+def test_load_driver_picks_utm_on_macos_and_refuses_elsewhere(monkeypatch):
+    monkeypatch.setattr(control_driver.platform, "system", lambda: "Plan9")
     with pytest.raises(DriverError) as raised:
         control_driver.load_driver()
-    assert "M5" in str(raised.value)
+    assert "Plan9" in str(raised.value)
+    monkeypatch.setattr(control_driver.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(control_driver_utm.UtmDriver, "available", lambda self: "no UTM here")
+    with pytest.raises(DriverError, match="no UTM here"):
+        control_driver.load_driver()
 
 
 def test_wait_for_state(monkeypatch):
@@ -217,3 +221,37 @@ def test_wait_for_state(monkeypatch):
 
 def test_vm_spec_memory():
     assert VmSpec(name="x", disk=pathlib.Path("/d"), cpus=1, memory_gib=8, seed_dir=pathlib.Path("/s")).memory_mib == 8192
+
+
+def test_images_and_clones_through_the_utm_driver(tmp_path, monkeypatch):
+    monkeypatch.setenv("SANDBOXED_DEVENV_HOME", str(tmp_path))
+    monkeypatch.setattr(control_driver_utm, "UTM_DOCUMENTS", tmp_path / "utm")
+    data = tmp_path / "utm" / "build.utm" / "Data"
+    data.mkdir(parents=True)
+    (data.parent / "config.plist").write_text("<plist/>")
+    (data / "backend.img").write_bytes(b"disk")
+    runner = FakeRunner([(0, '{"Drive": [{"ImageName": "backend.img"}]}', ""), (1, "", "no clonefile")])
+    driver = control_driver_utm.UtmDriver(runner=runner)
+    assert driver.static_network and driver.raw_disk and not driver.live_resources
+    assert driver.image_exists("backend-0.1.0") is False
+    location = driver.keep_image("build", "backend-0.1.0")
+    assert location == str(tmp_path / "images" / "backend-0.1.0.img")
+    assert driver.image_exists("backend-0.1.0") and driver.image_size("backend-0.1.0")[1] == 4
+    assert driver.image_location("backend-0.1.0") == location
+    pool = driver.address_pool(__import__("sandboxed_devenv.config", fromlist=["x"]).UserConfig())
+    assert (pool.start, pool.build_address) == ("192.168.64.20", "192.168.64.19")
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    runner = FakeRunner([(0, "", ""), (0, "", "")])
+    driver = control_driver_utm.UtmDriver(runner=runner)
+    driver.create(VmSpec(name="idesbx-p", disk=None, cpus=2, memory_gib=4, seed_dir=seed, image="backend-0.1.0"))
+    assert runner.commands[1][2:6] == ["idesbx-p", "4096", "2", location]
+    with pytest.raises(DriverError):
+        driver.create(VmSpec(name="x", disk=None, cpus=1, memory_gib=1, seed_dir=seed))
+    runner = FakeRunner([(0, '{"Drive": [{"ImageName": "backend.img"}]}', ""), (1, "", "no clonefile"), (0, "", ""), (0, "", "")])
+    driver = control_driver_utm.UtmDriver(runner=runner)
+    driver.clone_from("build", VmSpec(name="idesbx-q", disk=None, cpus=1, memory_gib=2, seed_dir=seed))
+    created = [command for command in runner.commands if command[:2] == ["osascript", "-"]]
+    assert created and created[0][2] == "idesbx-q" and created[0][5].endswith("idesbx-q.img")
+    assert driver.remove_image("backend-0.1.0") is True
+    assert driver.remove_image("backend-0.1.0") is False

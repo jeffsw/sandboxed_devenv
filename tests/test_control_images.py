@@ -8,7 +8,7 @@ import subprocess
 import pytest
 import yaml
 
-from sandboxed_devenv import cli, common, config, control_driver, control_images, remote, render
+from sandboxed_devenv import cli, common, config, control_driver, control_images, control_inventory, remote, render
 
 PUBKEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA test"
 CHECKSUMS = """63a93bd5a8d76e33b15ceb5daa3657bd79be804748051ab178e643b0f5da22e7 *ubuntu-26.04-server-cloudimg-arm64.img
@@ -19,9 +19,28 @@ CHECKSUMS = """63a93bd5a8d76e33b15ceb5daa3657bd79be804748051ab178e643b0f5da22e7 
 class FakeDriver:
     name = "fake"
     runner = common.Runner(dry_run=True)
+    static_network = True
+    raw_disk = True
+    live_resources = False
 
     def available(self):
         retval = None
+        return retval
+
+    def address_pool(self, user_config):
+        retval = control_inventory.utm_pool(user_config)
+        return retval
+
+    def image_exists(self, name):
+        retval = control_images.disk_path(name).is_file()
+        return retval
+
+    def image_location(self, name):
+        retval = str(control_images.disk_path(name))
+        return retval
+
+    def image_size(self, name):
+        retval = (0, 0)
         return retval
 
 
@@ -101,9 +120,8 @@ def test_record_round_trip_and_rebuild_reasons(home):
     images = config.images_dir()
     images.mkdir()
     control_images.record_path(record.name).write_text(record.to_yaml())
-    assert control_images.rebuild_reasons(control_images.load_record(record.name), record) == [
-        f"record without a disk at {control_images.disk_path(record.name)}"
-    ]
+    assert control_images.rebuild_reasons(control_images.load_record(record.name), record)[0].startswith("record without an image")
+    assert control_images.rebuild_reasons(control_images.load_record(record.name), record, exists=True) == []
     control_images.disk_path(record.name).write_bytes(b"")
     assert control_images.rebuild_reasons(control_images.load_record(record.name), record) == []
     changed = record.model_copy(update={"ide_backend_version": "9.9.9", "cloudinit_sha256": "0" * 64, "package_sha256": "1" * 64})

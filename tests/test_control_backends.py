@@ -36,8 +36,9 @@ def test_new_launches_records_registers_and_connects(rig, capsys):
     driver = rig["driver"]
     assert driver.calls == [("create", "idesbx-m2test"), ("start", "idesbx-m2test")]
     spec = driver.specs["idesbx-m2test"]
-    assert spec.disk == control_images.disk_path(rig["image"])
+    assert spec.image == rig["image"] and spec.disk is None
     assert (spec.cpus, spec.memory_gib) == (4, 8)
+    assert spec.address is None and spec.disk_gib == 32
     seed = driver.seeds["idesbx-m2test"]
     assert set(seed) == {"user-data", "meta-data", "network-config"}
     user_data = yaml.safe_load(seed["user-data"])

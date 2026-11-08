@@ -41,6 +41,9 @@ def checkout() -> pathlib.Path:
 
 class FakeDriver:
     name = "utm"
+    static_network = True
+    raw_disk = True
+    live_resources = False
 
     def __init__(self, runner=None):
         self.runner = runner or common.Runner()
@@ -48,12 +51,49 @@ class FakeDriver:
         self.specs = {}
         self.seeds = {}
         self.calls = []
-        self.live_resources = {}
+        self.resources_of = {}
         self.pinned_at_start = {}
+        self.images = {}
 
     def available(self):
         retval = None
         return retval
+
+    def address_pool(self, user_config):
+        retval = control_inventory.utm_pool(user_config)
+        return retval
+
+    def image_exists(self, name):
+        retval = name in self.images or control_driver.image_file(name).is_file()
+        return retval
+
+    def image_location(self, name):
+        retval = str(control_driver.image_file(name))
+        return retval
+
+    def image_size(self, name):
+        path = control_driver.image_file(name)
+        retval = (path.stat().st_size, path.stat().st_size) if path.is_file() else (4096, 4096)
+        return retval
+
+    def keep_image(self, vm, name):
+        self.calls.append(("keep_image", vm, name))
+        self.images[name] = vm
+        control_driver.image_file(name).parent.mkdir(parents=True, exist_ok=True)
+        control_driver.image_file(name).write_bytes(b"kept")
+        retval = self.image_location(name)
+        return retval
+
+    def remove_image(self, name):
+        retval = self.image_exists(name)
+        self.images.pop(name, None)
+        if control_driver.image_file(name).is_file():
+            control_driver.image_file(name).unlink()
+        return retval
+
+    def clone_from(self, source, spec):
+        self.calls.append(("export", source))
+        self.create(spec)
 
     def exists(self, name):
         retval = name in self.vms
@@ -64,7 +104,7 @@ class FakeDriver:
         self.specs[spec.name] = spec
         self.seeds[spec.name] = {path.name: path.read_text() for path in spec.seed_dir.iterdir()}
         self.vms[spec.name] = control_driver.STOPPED
-        self.live_resources[spec.name] = (spec.cpus, spec.memory_gib)
+        self.resources_of[spec.name] = (spec.cpus, spec.memory_gib)
 
     def start(self, name):
         self.calls.append(("start", name))
@@ -102,18 +142,14 @@ class FakeDriver:
         retlist = ["screen", "/dev/ttys009"]
         return retlist
 
-    def export_disk(self, name, dest):
-        self.calls.append(("export", name))
-        pathlib.Path(dest).write_bytes(b"disk")
-
     def resources(self, name):
-        retval = self.live_resources.get(name)
+        retval = self.resources_of.get(name)
         return retval
 
     def set_resources(self, name, cpus, memory_gib):
         self.calls.append(("set_resources", name, cpus, memory_gib))
-        current = self.live_resources[name]
-        self.live_resources[name] = (cpus or current[0], memory_gib or current[1])
+        current = self.resources_of[name]
+        self.resources_of[name] = (cpus or current[0], memory_gib or current[1])
 
 
 def repositories_from_seed(seed: dict) -> list[str]:
