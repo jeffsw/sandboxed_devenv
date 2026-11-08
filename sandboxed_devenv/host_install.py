@@ -164,11 +164,33 @@ def step_files(ctx: Context) -> list[Outcome]:
     return retlist
 
 
+def mint_keys_for_invoking_user(ctx: Context) -> None:
+    """On a machine that is its own control side (`client_host: local`), the key pairs may not
+    exist yet when `host install` runs first; mint them as the invoking user would, owned by
+    that user, not by root."""
+    from sandboxed_devenv import control_creds
+
+    control_creds.ensure_keys()
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user and os.geteuid() == 0:
+        account = pwd.getpwnam(sudo_user)
+        for path in [ctx.secrets_dir, *ctx.secrets_dir.iterdir()]:
+            os.chown(path, account.pw_uid, account.pw_gid)
+
+
 def step_key_pair(ctx: Context) -> list[Outcome]:
-    """gw's key to the backends: the sandbox key pair from the secrets directory. A legacy
-    gw_ed25519 pair there is used with a warning, since it is also the control key."""
+    """gw's key to the backends: the sandbox key pair from the secrets directory, minted here
+    when this machine is its own control side and has none yet. A legacy gw_ed25519 pair there
+    is used with a warning, since it is also the control key."""
     private = ctx.secrets_dir / config.SANDBOX_KEY_NAME
     retlist = []
+    legacy = ctx.secrets_dir / config.LEGACY_RIG_KEY_NAME
+    if not private.is_file() and not legacy.is_file() and config.load_user_config().client_host == "local":
+        retlist.append(outcome(ctx, "key pairs", f"mint the control and sandbox key pairs in {ctx.secrets_dir}, since this "
+                               "machine is its own control side and has none yet", True,
+                               lambda: mint_keys_for_invoking_user(ctx)))
+        if retlist[-1].status == FAILED or not ctx.apply:
+            return retlist
     if not private.is_file():
         legacy = ctx.secrets_dir / config.LEGACY_RIG_KEY_NAME
         if legacy.is_file():
@@ -338,7 +360,8 @@ def plan_lines(values: dict[str, str], secrets_dir: pathlib.Path) -> list[str]:
         dest = render.rendered_dest(entry, values)
         retlist.append(f"file {dest} ({entry.owner}:{entry.group} {entry.mode}): {entry.description}")
     retlist.extend([
-        f"gw key pair: {GW_KEY} and .pub from {secrets_dir / config.SANDBOX_KEY_NAME}",
+        f"gw key pair: {GW_KEY} and .pub from {secrets_dir / config.SANDBOX_KEY_NAME} (minted first when this machine is "
+        "its own control side and has none)",
         f"apparmor: apparmor_parser --replace {APPARMOR_PROFILE}",
         "sysctl: sysctl --system (net.ipv4.ip_forward = 1)",
         f"nftables: nft --check {NFTABLES_CONF}; the service stays disabled until policy enables it",

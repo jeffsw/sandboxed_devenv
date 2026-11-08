@@ -133,3 +133,26 @@ def test_incus_pool_step_creates_the_dir_pool_where_incus_exists(tmp_path, monke
     assert commands[-1] == ["incus", "storage", "create", "sandboxed-devenv", "dir", "source=/var/lib/sandboxed-devenv/incus"]
     monkeypatch.setattr(host_install, "run", lambda command, **kwargs: subprocess.CompletedProcess(command, 0, "", ""))
     assert [result.status for result in host_install.step_incus_pool(ctx)] == [steps.UNCHANGED]
+
+
+def test_key_pair_step_mints_the_pairs_on_a_machine_that_is_its_own_control_side(tmp_path, monkeypatch):
+    monkeypatch.setenv("SANDBOXED_DEVENV_HOME", str(tmp_path))
+    monkeypatch.delenv("SUDO_USER", raising=False)
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    gw_key = tmp_path / "vm_ed25519"
+    monkeypatch.setattr(host_install, "GW_KEY", gw_key)
+    monkeypatch.setattr(host_install, "sync_file",
+                        lambda dest, content, owner, group, mode, apply: steps.sync_file(dest, content, ME, MY_GROUP, mode, apply))
+    ctx = host_install.Context(apply=True, values={}, command="host install", secrets_dir=secrets)
+    outcomes = host_install.step_key_pair(ctx)
+    assert [result.status for result in outcomes] == [steps.CHANGED, steps.CHANGED, steps.CHANGED]
+    assert outcomes[0].label == "key pairs"
+    assert (secrets / "control_ed25519").is_file() and (secrets / "sandbox_ed25519.pub").is_file()
+    assert gw_key.read_bytes() == (secrets / "sandbox_ed25519").read_bytes()
+    again = host_install.step_key_pair(ctx)
+    assert [result.status for result in again] == [steps.UNCHANGED, steps.UNCHANGED]
+    (tmp_path / "config.yaml").write_text("client_host: ssh://jsw@192.168.64.10\n")
+    for path in secrets.iterdir():
+        path.unlink()
+    assert [result.status for result in host_install.step_key_pair(ctx)] == [steps.FAILED]

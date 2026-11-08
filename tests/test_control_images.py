@@ -253,3 +253,13 @@ def test_architecture_names_match_versions_yaml(monkeypatch):
     assert common.architecture() == "x86_64"
     assert common.format_duration(42.4) == "42 s"
     assert common.format_duration(185) == "3 min 5 s"
+
+
+def test_wheel_build_command_prefers_uv_then_pipx_then_an_isolated_interpreter(monkeypatch):
+    monkeypatch.setattr(render.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+    assert render.wheel_build_command(pathlib.Path("/o"))[:2] == ["uv", "build"]
+    monkeypatch.setattr(render.shutil, "which", lambda name: "/usr/bin/pipx" if name == "pipx" else None)
+    assert render.wheel_build_command(pathlib.Path("/o"))[:3] == ["pipx", "run", "build"]
+    monkeypatch.setattr(render.shutil, "which", lambda name: None)
+    command = render.wheel_build_command(pathlib.Path("/o"))
+    assert command[1:4] == ["-I", "-m", "build"]

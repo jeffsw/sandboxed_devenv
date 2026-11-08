@@ -392,11 +392,17 @@ def find_checkout(start: pathlib.Path | None = None) -> pathlib.Path | None:
 
 
 def wheel_build_command(out_dir: pathlib.Path) -> list[str]:
-    """uv when present (pinned by mise), else the `build` package from the dev group."""
+    """uv when present (pinned by mise); else `pipx run build`, which fetches the `build` tool into
+    pipx's own cache without root (the laptop, where the package is a global pipx install whose
+    venv has no `build`); else the `build` package in this interpreter, isolated from the current
+    directory, since a checkout's own `build/` output directory shadows the module otherwise
+    (seen on the laptop, 8 November 2026)."""
     if shutil.which("uv"):
         retval = ["uv", "build", "--wheel", "--out-dir", str(out_dir)]
+    elif shutil.which("pipx"):
+        retval = ["pipx", "run", "build", "--wheel", "--outdir", str(out_dir)]
     else:
-        retval = [sys.executable, "-m", "build", "--wheel", "--outdir", str(out_dir)]
+        retval = [sys.executable, "-I", "-m", "build", "--wheel", "--outdir", str(out_dir)]
     return retval
 
 
