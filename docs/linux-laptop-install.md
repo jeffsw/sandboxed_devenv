@@ -19,19 +19,32 @@ confirm" are what its first run settles.
 ## Packages
 
 ```sh
-sudo apt install incus qemu-utils genisoimage pipx gh
+sudo apt install incus pipx gh git xorriso
 sudo adduser "$USER" incus-admin        # then log out and in again
 incus admin init                          # defaults are fine: a dir pool, a managed bridge incusbr0 with NAT
 ```
 
 `incus admin init` makes the default pool and `incusbr0`. The tool uses its own `dir` pool,
 `sandboxed-devenv`, which `host install` creates on `incus.storage_dir` when that is set in
-`config.yaml`, else in Incus's own location.
+`config.yaml`, else in Incus's own location. `xorriso` (or `genisoimage`) writes the seed
+ISOs; `qemu-utils` is not needed on Incus, which imports the cloud image as downloaded.
+
+Two commands of the tool run as root through `sudo` on the client host it is itself: `host
+install`, and `connect add` and `connect rm`, which `new` and `rm` call. For `new` and the
+harnesses to run without a password prompt (the M4 gate says unattended), allow that one
+command and nothing else:
+
+```sh
+echo "$USER ALL=(root) NOPASSWD: /usr/local/bin/sandboxed-devenv" | sudo tee /etc/sudoers.d/sandboxed-devenv
+sudo chmod 440 /etc/sudoers.d/sandboxed-devenv
+```
 
 ## The package and its configuration
 
 ```sh
-git clone git@github.com:jeffsw/sandboxed_devenv.git ~/proj/ide_sandbox/sandboxed_devenv
+gh auth login                             # the browser flow; then let git use the same login
+gh auth setup-git
+git clone https://github.com/jeffsw/sandboxed_devenv.git ~/proj/ide_sandbox/sandboxed_devenv
 sudo pipx install --global ~/proj/ide_sandbox/sandboxed_devenv
 mkdir -p ~/.sandboxed_devenv/secrets && chmod 700 ~/.sandboxed_devenv/secrets
 cat > ~/.sandboxed_devenv/config.yaml <<'YAML'
@@ -48,10 +61,12 @@ Internet (`ip route show default` names it); `vm_subnet` is `incusbr0`'s subnet
 until the ruleset has been watched working. Then:
 
 ```sh
-gh auth login
 claude setup-token > /dev/null            # paste the token into ~/.sandboxed_devenv/secrets/claude_oauth_token
 sandboxed-devenv doctor
 ```
+
+The token can also be the Mac's: copy `~/.sandboxed_devenv/secrets/claude_oauth_token` over
+with `scp`, mode 0600. The key pairs are not copied; the laptop mints its own.
 
 `doctor` should say control: yes (incus), client host: not provisioned, the secrets and the
 GitHub login.
