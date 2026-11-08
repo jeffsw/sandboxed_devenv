@@ -698,7 +698,7 @@ def clone(args) -> int:
     if was_running:
         stop_vm(driver, source.vm_name, command)
     why = (f"the {driver.name} driver copies {source.vm_name}'s disk and takes the new seed"
-           + ("; APFS shares the blocks" if driver.name == "utm" else "; a full copy on a dir pool"))
+           + ("; APFS shares the blocks" if driver.name == "utm" else "; a full copy through a published image, minutes"))
     try:
         status = launch(user_config, driver, runner, record, project, command, why, source=source.vm_name)
     except (RemoteError, DriverError) as error:

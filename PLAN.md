@@ -702,9 +702,20 @@ Written before the laptop arrives, first run on it.
       `clone_from`, `address_pool`, and the flags `static_network`, `raw_disk`,
       `live_resources`; `image build`, `new`, `clone`, `resources`, `image ls` and `image
       rm` go through them, and the UTM path was run again on the Mac. The pool is `dir` on
-      `incus.storage_dir`, created by `host install` where `incus` exists. To confirm on
-      the laptop: the imported cloud image boots under Incus (UEFI, secure boot), cloud-init
-      finds the ISO device by its label, the static lease, publish and copy.
+      `incus.storage_dir`, created by `host install` where `incus` exists. Confirmed on the
+      laptop on 8 November, the day it arrived: the imported cloud image boots under Incus
+      (UEFI, secure boot), cloud-init finds the ISO device by its label (`/dev/sr0`), the
+      static lease holds, publish and init work, `limits.cpu` and `limits.memory` change on
+      the running VM and the guest sees them. `image build` took 6 min 17 s (publish 3 min
+      20 s of it), `new` 49 s. Not confirmed: `incus copy` of a VM on the `dir` pool fails
+      in the `dd` Incus 6.0.5 runs with direct I/O (ext4 over LUKS; the disk is a 512-aligned
+      32 GiB file, so not an alignment problem), and the copy would carry the source's
+      static lease; `clone` goes through a temporary published image instead, the path
+      `image build` proved. Three other things the first day taught: `host install` runs
+      before anything minted the key pairs on a machine that is its own control side, so it
+      mints them now; without `uv` the wheel builds with `pipx run build`, since the
+      checkout's own `build/` directory shadows the `build` module; and `new` needs a git
+      identity, from `config.yaml` or the global git config.
 - [ ] Host nftables from `policy.yaml` covering both halves: the `gw` uid for the client
       and the forward chain on the Incus bridge for the VMs. Incus network ACLs are the
       alternative if the bridge rules fight with Incus's own firewall management; decide

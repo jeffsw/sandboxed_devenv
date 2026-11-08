@@ -142,12 +142,16 @@ def test_lifecycle_clone_console_and_images(tmp_path, monkeypatch):
                                ["incus", "delete", "idesbx-p", "--force"]]
     assert not (tmp_path / "seeds" / "idesbx-p.iso").exists()
     assert driver.console_command("idesbx-p") == ["incus", "console", "idesbx-p", "--type=console"]
-    driver, runner = driver_with([(0, "", ""), (0, "", ""), (0, INSTANCES, ""), (0, "", ""), (0, "", ""), (0, "", ""), (0, "", "")])
-    driver.clone_from("idesbx-p", VmSpec(name="idesbx-q", disk=None, cpus=1, memory_gib=2, seed_dir=seed, address="10.42.0.21"))
-    assert runner.commands[0] == ["incus", "copy", "idesbx-p", "idesbx-q"]
+    driver, runner = driver_with([(0, "", ""), (0, "", ""), (0, "", ""), (0, "", ""), (0, INSTANCES, ""), (0, "", ""), (0, "", ""), (0, "", "")])
+    driver.clone_from("idesbx-p", VmSpec(name="idesbx-q", disk=None, cpus=1, memory_gib=2, seed_dir=seed, address="10.42.0.21",
+                                        disk_gib=32))
+    assert runner.commands[0] == ["incus", "publish", "idesbx-p", "--alias", "sandboxed-devenv-import-clone-idesbx-q", "--reuse"]
+    assert runner.commands[1] == ["incus", "init", "sandboxed-devenv-import-clone-idesbx-q", "idesbx-q", "--vm", "--storage", "sandboxed-devenv",
+                                  "-c", "limits.cpu=1", "-c", "limits.memory=2GiB", "-d", "root,size=32GiB"]
+    assert runner.commands[2] == ["incus", "image", "delete", "sandboxed-devenv-import-clone-idesbx-q"]
     # idesbx-q as recorded has no devices of its own yet, so the nic is overridden from the profile.
     assert ["incus", "config", "device", "override", "idesbx-q", "eth0", "ipv4.address=10.42.0.21"] in runner.commands
-    driver, runner = driver_with([(0, "", ""), (0, "", ""), (0, INSTANCES, ""), (0, "", ""), (0, "", ""), (0, "", ""), (0, "", "")])
+    driver, runner = driver_with([(0, "", ""), (0, "", ""), (0, "", ""), (0, "", ""), (0, INSTANCES, ""), (0, "", ""), (0, "", ""), (0, "", "")])
     driver.clone_from("idesbx-x", VmSpec(name="idesbx-p", disk=None, cpus=1, memory_gib=2, seed_dir=seed, address="10.42.0.22"))
     assert ["incus", "config", "device", "remove", "idesbx-p", "cidata"] in runner.commands
     assert ["incus", "config", "device", "set", "idesbx-p", "eth0", "ipv4.address=10.42.0.22"] in runner.commands
