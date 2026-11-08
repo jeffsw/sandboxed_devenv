@@ -15,7 +15,10 @@ Titles on GitHub start with ``sandboxed-devenv``, so `creds audit --fix` deletes
 keys this tool made; a key with any other title is reported and left alone. Keys registered by
 hand at M2 are adopted when their text matches an inventory entry.
 
-The rig key pair, the one credential every VM creation needs, is minted here too (M2).
+The two key pairs every VM creation needs are minted here too: the control key (the control
+machine into desk and every backend) and the sandbox key (gw into the backends only). Before the
+split (PLAN.md M3) one pair, ``gw_ed25519``, served both; found, it becomes the control key, since
+it is what the control side has been logging in with, and a sandbox key is minted beside it.
 """
 
 import dataclasses
@@ -43,7 +46,8 @@ from sandboxed_devenv.control_inventory import (
 from sandboxed_devenv.remote import RemoteError
 
 ALL_REPOSITORIES = "ALL"
-RIG_KEY_COMMENT_USER = "gw"
+CONTROL_KEY_COMMENT_USER = "control"
+SANDBOX_KEY_COMMENT_USER = "gw"
 GH = "gh"
 TITLE_PREFIX = "sandboxed-devenv "
 CLAUDE_TOKEN_KIND = "claude-token"
@@ -61,34 +65,77 @@ class GitHubNotFound(GitHubError):
     pass
 
 
-# --- the rig key (M2) ------------------------------------------------------------------------------
+# --- the control and sandbox keys ------------------------------------------------------------------
 
 
-def ensure_rig_key(runner: common.Runner | None = None) -> pathlib.Path:
-    """The rig key pair in the secrets directory, minted on first use: ed25519, no passphrase, so
-    `image build` and `new` can log into a VM they just booted. The client sandbox gets the same
-    pair as /home/gw/.ssh/vm_ed25519 (`host install`), which is why the comment names gw."""
+def mint_key(runner: common.Runner, path: pathlib.Path, comment: str) -> None:
+    """ed25519, no passphrase (-N ""), with the comment (-C), at the file (-f)."""
+    completed = runner.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", str(path)])
+    if completed.returncode != 0:
+        raise remote.RemoteError(f"ssh-keygen failed with status {completed.returncode}")
+
+
+def ensure_keys(runner: common.Runner | None = None) -> tuple[pathlib.Path, pathlib.Path]:
+    """The control and sandbox key pairs in the secrets directory, minted on first use. A legacy
+    ``gw_ed25519`` pair becomes the control key (renamed), and the first sandbox key minted next to
+    it means desk and existing backends still hold the old arrangement until re-provisioned, which
+    the message says."""
     runner = runner or common.Runner()
-    retval = remote.rig_key_path()
-    if not retval.is_file():
-        secrets = retval.parent
-        secrets.mkdir(parents=True, exist_ok=True)
-        secrets.chmod(0o700)
-        comment = f"{RIG_KEY_COMMENT_USER}@{socket.gethostname()}"
-        completed = runner.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", str(retval)])
-        if completed.returncode != 0:
-            raise remote.RemoteError(f"ssh-keygen failed with status {completed.returncode}")
-        print(f"rig key pair created: {retval} (comment {comment}); every VM made from now on trusts it")
+    control = remote.control_key_path()
+    sandbox = remote.sandbox_key_path()
+    secrets = control.parent
+    secrets.mkdir(parents=True, exist_ok=True)
+    secrets.chmod(0o700)
+    legacy = secrets / config.LEGACY_RIG_KEY_NAME
+    if not control.is_file() and legacy.is_file():
+        legacy.rename(control)
+        if legacy.with_suffix(".pub").is_file():
+            legacy.with_suffix(".pub").rename(control.with_suffix(".pub"))
+        print(f"{legacy.name} renamed to {control.name}: it is the key the control side logs in with; a separate sandbox "
+              "key for gw follows (PLAN.md M3, the key split)", flush=True)
+    hostname = socket.gethostname()
+    if not control.is_file():
+        mint_key(runner, control, f"{CONTROL_KEY_COMMENT_USER}@{hostname}")
+        print(f"control key pair created: {control}; the control side logs into every VM made from now on with it", flush=True)
+    if not sandbox.is_file():
+        mint_key(runner, sandbox, f"{SANDBOX_KEY_COMMENT_USER}@{hostname}")
+        print(f"sandbox key pair created: {sandbox}; backends made from now on let gw in with it. Desk needs it as "
+              "/home/gw/.ssh/vm_ed25519: `sandboxed-devenv client-host provision` puts it there, and a backend made "
+              "before this is reachable by gw again after `rm` and `new`", flush=True)
+    retval = (control, sandbox)
     return retval
 
 
-def rig_public_key() -> str:
+def public_key_of(path: pathlib.Path) -> str:
     """The public half, one line, for cloud-init's ssh_authorized_keys."""
-    path = remote.rig_key_path().with_suffix(".pub")
-    if not path.is_file():
-        raise remote.RemoteError(f"no public key at {path} beside the rig key")
-    retval = path.read_text().strip()
+    public = path.with_suffix(".pub")
+    if not public.is_file():
+        raise remote.RemoteError(f"no public key at {public} beside {path.name}")
+    retval = public.read_text().strip()
     return retval
+
+
+def control_public_key() -> str:
+    retval = public_key_of(remote.control_key_path())
+    return retval
+
+
+def sandbox_public_key() -> str:
+    retval = public_key_of(remote.sandbox_key_path())
+    return retval
+
+
+def seed_key_values(dry_run: bool, runner: common.Runner) -> dict[str, str]:
+    """``CONTROL_PUBKEY`` and ``SANDBOX_PUBKEY`` for a seed; on a dry run, whatever exists or a
+    note, without minting anything."""
+    if dry_run:
+        retdict = {}
+        for name, path in (("CONTROL_PUBKEY", remote.control_key_path()), ("SANDBOX_PUBKEY", remote.sandbox_key_path())):
+            retdict[name] = public_key_of(path) if path.with_suffix(".pub").is_file() else "ssh-ed25519 (minted on the real run)"
+    else:
+        ensure_keys(runner)
+        retdict = {"CONTROL_PUBKEY": control_public_key(), "SANDBOX_PUBKEY": sandbox_public_key()}
+    return retdict
 
 
 def key_fingerprint(public_key_file: pathlib.Path) -> str | None:
@@ -500,17 +547,24 @@ def cmd_repo_ls(args) -> int:
 
 
 def credential_rows(records: list[ProjectRecord]) -> list[dict]:
-    """Every credential the inventory knows, plus the rig key from the secrets directory."""
+    """Every credential the inventory knows, plus the two key pairs from the secrets directory."""
     retlist = []
-    key = remote.rig_key_path()
-    if key.is_file():
-        created = datetime.datetime.fromtimestamp(key.stat().st_mtime, datetime.UTC).replace(microsecond=0)
-        retlist.append({
-            "project": "-", "kind": "rig-key", "scope": "the control side into every VM; gw into every backend",
-            "state": ACTIVE, "id": None, "fingerprint": key_fingerprint(key.with_suffix(".pub")),
-            "location": f"{key}, desk's secrets directory, /home/gw/.ssh/vm_ed25519", "created": created.isoformat(),
-            "revoke": "replace the pair, then rebuild desk and every backend (PLAN.md M3, the key split)",
-        })
+    pairs = [
+        ("control-key", remote.control_key_path(), "the control side into desk and every backend",
+         f"{remote.control_key_path()} only",
+         "replace the pair, then `client-host new --replace` and `rm` plus `new` for every backend"),
+        ("sandbox-key", remote.sandbox_key_path(), "gw into every backend",
+         f"{remote.sandbox_key_path()}, desk's secrets directory, /home/gw/.ssh/vm_ed25519",
+         "replace the pair, then `client-host provision` and `rm` plus `new` for every backend"),
+    ]
+    for kind, key, scope, location, revoke in pairs:
+        if key.is_file():
+            created = datetime.datetime.fromtimestamp(key.stat().st_mtime, datetime.UTC).replace(microsecond=0)
+            retlist.append({
+                "project": "-", "kind": kind, "scope": scope, "state": ACTIVE, "id": None,
+                "fingerprint": key_fingerprint(key.with_suffix(".pub")), "location": location,
+                "created": created.isoformat(), "revoke": revoke,
+            })
     for record in records:
         for repository in record.repos:
             retlist.append({
@@ -538,7 +592,7 @@ def creds_ls(args) -> int:
     if args.json:
         print(json.dumps(rows, indent=2))
     elif not rows:
-        print("no credentials: no rig key yet and no projects in the inventory")
+        print("no credentials: no key pairs yet and no projects in the inventory")
     else:
         table = [("PROJECT", "KIND", "SCOPE", "STATE", "ID", "FINGERPRINT", "AGE", "LOCATION")]
         for row in rows:
