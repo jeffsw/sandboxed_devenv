@@ -118,6 +118,7 @@ sandboxed_devenv/
   render.py                      template rendering and the wheel build, no side effects
   steps.py                       idempotent steps shared by host install and backend prepare: outcomes, atomic file sync
   canary.py                      stdlib-only probes; the `canary` subcommand; runnable with python3 -m
+  canary_expected.json           the canary's golden result per role, for `--expect` and the harnesses
   remote.py                      runs the command on the client host or a backend over SSH, parses --json
   control_driver.py              the Driver protocol
   control_driver_utm.py          utmctl, osascript, plutil, hdiutil (from create-vms.sh, make-seed.sh)
@@ -198,7 +199,7 @@ it is and whether it is rendered:
 | `sandboxed-devenv --version` | any | The package version; it must agree on every machine or `test end-to-end` fails |
 | `sandboxed-devenv doctor` | any | Which roles this machine can play, driver and tool versions, what `~/.sandboxed_devenv/` holds, the version on each client host and backend it can reach |
 | `sandboxed-devenv render [--out DIR]` | any | Renders every artifact (cloud-inits, nftables, AppArmor, ssh configs) and builds the wheel, without touching a VM. CI's entry point |
-| `sandboxed-devenv canary --role ROLE [--json]` | any | The probes for the client or backend role, run locally |
+| `sandboxed-devenv canary --role ROLE [--json] [--expect [FILE]]` | any | The probes for the client or backend role, run locally; `--expect` compares with the golden result for the role |
 | `sandboxed-devenv image build [--force] [--wheel PATH] [--cpus N] [--memory-gib N]` | control | Downloads the Ubuntu cloud image (checked against its SHA256SUMS), boots it once with the base cloud-init, waits for SSH and cloud-init, pushes and installs the wheel (built from the checkout unless `--wheel` names one), runs `backend prepare --stage image`, `cloud-init clean`, powers off, keeps the disk as the base image with a record of what went in. Skips the build when nothing changed; `--force` rebuilds |
 | `sandboxed-devenv image ls / rm` | control | Base images and their versions |
 | `sandboxed-devenv client-host new [--replace] [--wheel PATH] [--cpus N] [--memory-gib N]` | control | The desk VM on the Mac rig: the cloud image as a raw disk, the host cloud-init and network-config (static address, routes to both halves of the VM subnet), a VM with a display, then over SSH the wheel and `sudo pipx install --global`, the rig key pair into the host user's secrets directory, `sudo sandboxed-devenv host install`, a reboot into GNOME. Refuses when `client_host` is `local`: the laptop is its own client host |
@@ -218,11 +219,11 @@ it is and whether it is rendered:
 | `sandboxed-devenv creds ls [PROJECT] [--json]` | control | Every credential, scope, age, where it lives, how it is revoked |
 | `sandboxed-devenv creds rotate PROJECT [--deploy-key [OWNER/REPO]] [--claude-token]` | control | Regenerate inside the VM (`backend repo rekey` for one repository or all), re-register, update the inventory |
 | `sandboxed-devenv creds audit [--fix]` | control | Compares the inventory with GitHub's deploy keys on every repository it knows: retries pending revocations, adopts keys registered by hand, reports keys GitHub holds that no project claims, and with `--fix` deletes those whose title says this tool made them |
-| `sandboxed-devenv test end-to-end` | control | End to end on real VMs, all three roles: builds or reuses the base image, creates a throwaway project, waits for its backend, runs the canary in the client and backend roles, checks SSH from `gw` to the backend and that the IDE backend service is up, compares `--version` across the three machines, then removes everything. Not covered: the interactive path (Gateway, client, preview, clipboard), provisioning the client host (`host install`), and the GitHub deploy-key flow |
+| `sandboxed-devenv test end-to-end [--keep] [--cpus N] [--memory-gib N]` | control | End to end on real VMs, all three roles: builds or reuses the base image, creates a throwaway project, waits for its backend, runs the canary in the client and backend roles against the golden results, checks `host install --check`, SSH from `gw` to the backend and that the IDE backend is registered, compares `--version` across the three machines, then removes everything (kept on failure or with `--keep`). Not covered: the interactive path (Gateway, client, preview, clipboard), provisioning the client host (`host install`), and the GitHub deploy-key flow |
 | `sandboxed-devenv test host` | control | Seconds, no VM created: `host install --check` for drift and the canary in the client role on the client host |
 | `sandboxed-devenv test backend PROJECT` | control | Seconds, on an existing backend: `backend status` and the canary in the backend role, for after an upgrade |
 | `sandboxed-devenv host install [--dry-run] [--check]` | client host | Provisions the host: `gw` user and linger, files from the manifest, AppArmor, sysctl, nftables, Gateway tarball. Linux only, needs root |
-| `sandboxed-devenv host check` | client host | Runs the canary in the client role as `gw` (through `client exec`) and prints the summary |
+| `sandboxed-devenv host check [--json] [--expect [FILE]]` | client host | Runs the canary in the client role as `gw` (through `client exec`) and prints the summary; the flags pass to the canary |
 | `sandboxed-devenv client start` | client host | What `gw-run` does: the runtime-dir and Wayland socket ACLs, then `client session` as `gw` through sudo |
 | `sandboxed-devenv client session` | client host | As `gw`: the private Xwayland with its cookie, then the Gateway launcher |
 | `sandboxed-devenv client exec -- CMD` | client host | What `gw-exec` does: run a command as `gw` with its display and cookie |
@@ -631,34 +632,52 @@ Parity with today's rig, then the old scripts go.
 
 ### M4: testing
 
-- [ ] `canary.py` gains `--json` output (one object per probe plus a summary) and keeps
-      the human output; exit code non-zero on any FAIL (already) and a `--expect FILE`
-      mode that compares against a golden result for the role.
-- [ ] Unit tests: renderer golden files for both VMs and both architectures; drivers
-      against recorded `utmctl list` and `incus list --format json` output; `remote.py`
-      against recorded `--json` output; inventory round-trips; `policy.yaml` to nftables
-      checked with `nft --check` on Linux; `host install --dry-run` plans.
-- [ ] `sandboxed-devenv test end-to-end`: builds or reuses the image,
-      `sandboxed-devenv new ci-<run>`, waits, runs the canary in both roles through
-      `remote.py`, checks SSH from `gw` to the backend, that the backend service is
-      present, and that `--version` agrees on the control side, the client host and the
-      backend, then `sandboxed-devenv rm`. Runs on the Mac on demand (`mise run test-e2e`)
-      and later on the Linux laptop; never in GitHub CI. `test host` and
-      `test backend PROJECT` are the cheap siblings: no VM is created and they run in
-      seconds.
-- [ ] The interactive checklist in `docs/runbook.md`: Gateway, client, Wayland toolkit in
+- [x] `canary.py` has `--json` output (one object per probe plus a summary) and the human
+      output; exit code non-zero on any FAIL; and `--expect [FILE]`, which compares the
+      statuses with a golden result for the role: the package's `canary_expected.json`
+      (probe names or prefixes ending in `*`, each with the statuses allowed; any other
+      FAIL is a mismatch too) or a file. The command probe runs for both roles now. Done
+      8 November.
+- [x] Unit tests: the rendered documents and files asserted for both roles (as assertions
+      on the content rather than golden files, which the templates' dated comments would
+      churn), the architecture-keyed URLs, the UTM driver against recorded `utmctl`
+      output (Incus at M5), `remote.py` against recorded `--json`, inventory round-trips,
+      `policy.yaml` to nftables checked with `nft --check` in CI, `host install --dry-run`
+      plans, and the control commands against fakes of the driver, the backend, the client
+      host and GitHub (`tests/conftest.py`). 240 tests on 8 November.
+- [x] `sandboxed-devenv test end-to-end`: builds or reuses the image, `new ci-<stamp>
+      --disposable` (so it carries no token), then: the backend ready with the IDE backend
+      registered, the canary's golden result in the backend role, `host install --check`
+      on the client host, the canary's golden result in the client role there (as gw,
+      which needs a GNOME session in which `client start` has run), gw's SSH path to the
+      backend through the stanza `connect add` wrote, `--version` on all three machines,
+      then `rm`; the backend stays for inspection when a check failed, or with `--keep`.
+      The canary's probes are compared on the control side with this package's golden
+      result, so the expectations are the checkout's even when a machine's package is
+      older. `mise run test-e2e` on the Mac, later on the laptop; never in GitHub CI.
+      `test host` and `test backend PROJECT` are the cheap siblings. First passing run
+      8 November: 9 checks ok in 2 min 33 s, of which the image rebuild was 99 s (the
+      checks themselves about 30 s). The two failed runs before it found that the base
+      image carried an older package (now the record holds a digest of the package source,
+      so a code change rebuilds the image) and that the runtime-directory probe reports
+      an INFO line and a PASS line under one name.
+- [x] The interactive checklist in `docs/runbook.md`: Gateway, client, Wayland toolkit in
       About, Markdown preview, clipboard both ways, Claude Code `/status`, git fetch
-      without a key dialog, plugin install path. This is the part that stays manual.
-- [ ] `lint-doc` house rules extended to `PLAN.md`, `README.md` and `docs/`.
-- [ ] Warnings in bold yellow wherever a terminal shows them: `common.warning()` colours
+      without a key dialog, plugin install path. This is the part that stays manual. The
+      runbook also covers install, secrets, a project's life, disposal, rotation, the
+      harnesses and troubleshooting. Written 8 November.
+- [x] `lint-doc` house rules extended to `PLAN.md`, `README.md` and `docs/` (8 November); a
+      pipe inside backticks no longer counts as a table cell.
+- [x] Warnings in bold yellow wherever a terminal shows them: `common.warning()` colours
       the `connect add` and `connect rm` notices about a running Gateway (8 November,
       asked for by the user), and the control side forwards the setting to a command it
       runs on another machine (`SANDBOXED_DEVENV_COLOR=always` over SSH, since the far
-      side sees a pipe; `NO_COLOR` honoured). Extend it to the other warning-like lines:
-      a failed registration or `connect` in `new`, pending revocations in `rm` and `ls`,
-      the leftover build VM in `image build`, `resources` announcing a stop, unclaimed
-      keys in `creds audit`. (The running-Gateway line stays bold yellow although nothing
-      is wrong, because the user has something to do: defocus and refocus the window.)
+      side sees a pipe; `NO_COLOR` honoured). Extended the same day to the other
+      warning-like lines: a failed registration or `connect` in `new`, a failed
+      revocation in `rm`, the leftover build VM and a forced stop in `image build`, a
+      forced stop anywhere, unclaimed keys in `creds audit`, and the harnesses' FAIL
+      lines. (The running-Gateway line stays bold yellow although nothing is wrong,
+      because the user has something to do: defocus and refocus the window.)
 - [x] Static verification in CI: schema, AppArmor and nftables parsers, shell, Python,
       YAML, workflow, doc rules and Mermaid rendering.
 
@@ -705,10 +724,9 @@ Written before the laptop arrives, first run on it.
       `sandboxed-devenv image build`, `sandboxed-devenv ls` shows which backends run an
       older image or package; `sandboxed-devenv upgrade PROJECT` recreates from the new
       image with the same credentials policy, or pushes the new wheel and reinstalls when
-      only the package changed. Noted 8 November: the rebuild decision compares versions
-      and the rendered cloud-init, so a code change without a version bump leaves the
-      image and every backend on the old code until `image build --force`; a digest of
-      the wheel in the record would catch it.
+      only the package changed. The rebuild decision records a digest of the package's
+      source tree since 8 November (M4), so a code change rebuilds the image without a
+      version bump; `--force` is for everything else.
 - [ ] Cloud and service CLIs per project (`aws`, Linode, Terraform) and their scoped
       credentials, the open question in the summary.
 - [ ] Section 5 hardening on the host: the 1Password agent allowlist, nothing
@@ -726,7 +744,7 @@ Written before the laptop arrives, first run on it.
 | M1 client host | `desk` rebuilt from the slim template with the package installed; `sandboxed-devenv host check` 0 FAIL; Gateway via `client start`; preview and clipboard work | Mac |
 | M2 drivers and backend split | `sandboxed-devenv new` to a connected client on the Mac, the package installed in the backend; old scripts deleted. Status 8 November: `new` ready in 17 s with the connection written for gw on desk, gw's SSH to the backend proven, scripts deleted; left: a desk from `client-host new` and the connection opened in Gateway's window | Mac |
 | M3 credentials | `sandboxed-devenv new` and `sandboxed-devenv rm` need no manual GitHub or Gateway step. Met 8 November: `new --repo` registered and cloned, its connection appeared in Gateway's list and worked, `rm` revoked the key and removed the entry; with Gateway open, the entry appears after a click on its window and survives its exit | Mac |
-| M4 testing | `mise run test-e2e` passes on the Mac unattended, versions matching on all three machines | Mac |
+| M4 testing | `mise run test-e2e` passes on the Mac unattended, versions matching on all three machines. Met 8 November: 9 checks ok in 2 min 33 s including an image rebuild | Mac |
 | M5 Linux laptop | `sandboxed-devenv test end-to-end` passes on the laptop; first real project opened | Linux laptop |
 
 M1 through M4 run on the Mac rig as it exists today, two UTM VMs, no nested
