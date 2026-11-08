@@ -20,6 +20,8 @@ import ipaddress
 import os
 import pathlib
 import pwd
+import shutil
+import subprocess
 import typing
 
 import pydantic
@@ -109,13 +111,57 @@ def user_policy_file() -> pathlib.Path:
     return retval
 
 
-def read_secret(name: str) -> str | None:
-    """A secret's content, stripped, or None when the file is absent or empty."""
+# A secret file may hold the secret itself or a 1Password reference, `op://vault/item/field`,
+# resolved with the 1Password CLI when the secret is read (PLAN.md M3). References may sit in
+# config-managed files; the values never do.
+OP_PREFIX = "op://"
+OP_COMMAND = "op"
+SOURCE_ABSENT = "absent"
+SOURCE_FILE = "file"
+SOURCE_ONEPASSWORD = "1password"
+
+
+class SecretError(Exception):
+    """A reference that cannot be resolved: no `op`, or `op read` failed."""
+
+
+def secret_source(name: str) -> tuple[str, str | None]:
+    """How a secret is kept: (``absent``|``file``|``1password``, the reference when it is one)."""
+    path = secrets_dir() / name
+    retval = (SOURCE_ABSENT, None)
+    if path.is_file():
+        text = path.read_text().strip()
+        if text.startswith(OP_PREFIX):
+            retval = (SOURCE_ONEPASSWORD, text)
+        elif text:
+            retval = (SOURCE_FILE, None)
+    return retval
+
+
+def resolve_reference(reference: str) -> str:
+    """`op read REFERENCE` through the 1Password CLI, which must be on the PATH and signed in."""
+    command = shutil.which(OP_COMMAND)
+    if not command:
+        raise SecretError(f"{reference} needs the 1Password CLI `op` on the PATH (brew install 1password-cli; `op signin`)")
+    completed = subprocess.run([command, "read", reference], capture_output=True, text=True)
+    if completed.returncode != 0:
+        raise SecretError(f"`op read {reference}` failed with status {completed.returncode}: {completed.stderr.strip()[-200:]}")
+    retval = completed.stdout.strip()
+    if not retval:
+        raise SecretError(f"`op read {reference}` returned nothing")
+    return retval
+
+
+def read_secret(name: str, resolver=None) -> str | None:
+    """A secret's value: the file's content, stripped, or the value an `op://` reference in it
+    resolves to; None when the file is absent or empty."""
     path = secrets_dir() / name
     retval = None
     if path.is_file():
         text = path.read_text().strip()
-        if text:
+        if text.startswith(OP_PREFIX):
+            retval = (resolver or resolve_reference)(text)
+        elif text:
             retval = text
     return retval
 
@@ -132,6 +178,12 @@ class BackendDefaults(pydantic.BaseModel):
     memory_gib: int = 8
     # The base image is grown to this size, sparse; the filesystem fills it at first boot.
     disk_gib: int = 32
+    # Which Claude token a backend gets (PLAN.md M3, the policy knob): `shared`, the one token in
+    # secrets/claude_oauth_token for every backend; `per-project`, the token in
+    # secrets/claude_oauth_token.<project> and none when that file is absent; `none`, never.
+    claude_token: typing.Literal["shared", "per-project", "none"] = "shared"
+    # Whether a backend made with --disposable (stranger code) gets a token at all.
+    disposable_claude_token: bool = False
 
 
 class UtmConfig(pydantic.BaseModel):

@@ -32,6 +32,14 @@ def _user_exists(name: str) -> bool:
     return retval
 
 
+def _source_text(source: str, reference: str | None) -> str:
+    if source == config.SOURCE_ONEPASSWORD:
+        retval = f"1Password reference {reference}"
+    else:
+        retval = source
+    return retval
+
+
 def _dir_line(label: str, path) -> str:
     state = "present" if path.is_dir() else "absent"
     retval = f"{label}: {path} ({state})"
@@ -98,6 +106,18 @@ def cmd_doctor(args) -> int:
     if (config.secrets_dir() / config.LEGACY_RIG_KEY_NAME).is_file():
         keys.append(f"{config.LEGACY_RIG_KEY_NAME} present (becomes the control key on the next VM command)")
     lines.append(f"{_dir_line('secrets', config.secrets_dir())}: {'; '.join(keys)}")
+    user_config = config.load_user_config()
+    tokens = []
+    source, reference = config.secret_source(config.CLAUDE_TOKEN_NAME)
+    tokens.append(f"{config.CLAUDE_TOKEN_NAME}: {_source_text(source, reference)}")
+    if config.secrets_dir().is_dir():
+        for path in sorted(config.secrets_dir().glob(f"{config.CLAUDE_TOKEN_NAME}.*")):
+            source, reference = config.secret_source(path.name)
+            tokens.append(f"{path.name}: {_source_text(source, reference)}")
+    op = shutil.which(config.OP_COMMAND)
+    lines.append(f"claude token policy: {user_config.backend.claude_token}"
+                 f"{', disposable backends get one' if user_config.backend.disposable_claude_token else ', none for disposable backends'}; "
+                 + "; ".join(tokens) + f"; 1Password CLI: {op or 'not found'}")
     policy_source = "the user's" if config.policy_file() == config.user_policy_file() else "the package's"
     lines.append(f"policy: {config.policy_file()} ({policy_source})")
     for line in lines:
