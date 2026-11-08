@@ -38,7 +38,7 @@ SSH_TIMEOUT = 900
 CLOUD_INIT_TIMEOUT = 3600
 STOP_TIMEOUT = 180
 FORCE_STOP_TIMEOUT = 60
-ERRORS = (RemoteError, DriverError, RenderError, OSError)
+ERRORS = (RemoteError, DriverError, RenderError, config.SecretError, OSError)
 
 
 def register(subparsers):
