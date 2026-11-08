@@ -238,6 +238,59 @@ def render_role(role: str, values: dict[str, str], out_dir: pathlib.Path) -> lis
     return retlist
 
 
+def cloudinit_document(role: str, kind: str, file_name: str, values: dict[str, str]) -> str:
+    """One rendered cloud-init document, found by its kind (``cloudinit-image``, ``cloudinit``) and
+    NoCloud file name (``user-data``, ``network-config``)."""
+    retval = None
+    for name, entry in load_manifest()[role].items():
+        if entry.is_cloudinit and cloudinit_file_name(name) == (kind, file_name):
+            retval = render_entry(role, name, entry, values)
+            break
+    if retval is None:
+        raise RenderError(f"no {kind} {file_name} document for role {role} in the manifest")
+    return retval
+
+
+def meta_data(instance_id: str, hostname: str) -> str:
+    """NoCloud's meta-data: a new instance id makes cloud-init treat the boot as a first boot."""
+    retval = f"instance-id: {instance_id}\nlocal-hostname: {hostname}\n"
+    return retval
+
+
+def write_seed(seed_dir: pathlib.Path, user_data: str, instance_id: str, hostname: str,
+               network_config: str | None = None) -> list[pathlib.Path]:
+    """A NoCloud seed directory: user-data, meta-data and, for a static address, network-config.
+    The driver turns it into an ISO (UTM) or instance config keys (Incus)."""
+    seed_dir.mkdir(parents=True, exist_ok=True)
+    retlist = []
+    documents = {"user-data": user_data, "meta-data": meta_data(instance_id, hostname)}
+    if network_config is not None:
+        documents["network-config"] = network_config
+    for name, text in documents.items():
+        path = seed_dir / name
+        path.write_text(text)
+        retlist.append(path)
+    return retlist
+
+
+def build_wheel(checkout: pathlib.Path, out_dir: pathlib.Path, runner=None) -> pathlib.Path:
+    """The wheel built from the checkout into ``out_dir``; the newest one there afterwards."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    command = wheel_build_command(out_dir)
+    if runner is None:
+        completed = subprocess.run(command, cwd=checkout, text=True, capture_output=True)
+    else:
+        completed = runner.run(command, cwd=checkout, capture_output=True)
+    if completed.returncode != 0:
+        raise RenderError(f"{shlex.join(command)} failed with status {completed.returncode}: "
+                          f"{(completed.stderr or '').strip()[-400:]}")
+    wheels = sorted(out_dir.glob("sandboxed_devenv-*.whl"), key=lambda path: path.stat().st_mtime)
+    if not wheels and not (runner and runner.dry_run):
+        raise RenderError(f"no wheel under {out_dir} after {shlex.join(command)}")
+    retval = wheels[-1] if wheels else out_dir / "sandboxed_devenv-unbuilt.whl"
+    return retval
+
+
 def find_checkout(start: pathlib.Path | None = None) -> pathlib.Path | None:
     """The repository root above `start` (default: the working directory), or None outside a checkout."""
     retval = None
