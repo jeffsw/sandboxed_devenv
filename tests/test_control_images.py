@@ -106,10 +106,13 @@ def test_record_round_trip_and_rebuild_reasons(home):
     ]
     control_images.disk_path(record.name).write_bytes(b"")
     assert control_images.rebuild_reasons(control_images.load_record(record.name), record) == []
-    changed = record.model_copy(update={"ide_backend_version": "9.9.9", "cloudinit_sha256": "0" * 64})
+    changed = record.model_copy(update={"ide_backend_version": "9.9.9", "cloudinit_sha256": "0" * 64, "package_sha256": "1" * 64})
     reasons = control_images.rebuild_reasons(control_images.load_record(record.name), changed)
     assert any(reason.startswith("ide_backend_version") for reason in reasons)
     assert "the image cloud-init changed" in reasons
+    assert "the package code changed" in reasons
+    assert len(record.package_sha256) == 64
+    assert control_images.package_digest() == record.package_sha256
     loaded = control_images.load_record(record.name)
     assert loaded.inputs() == record.inputs()
     assert loaded.built is None

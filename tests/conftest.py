@@ -5,13 +5,24 @@ backends, the client host and GitHub replaced by fakes that record what was aske
 """
 
 import base64
+import json
 import pathlib
 import subprocess
 
 import pytest
 import yaml
 
-from sandboxed_devenv import common, config, control_creds, control_driver, control_images, control_inventory, remote
+from sandboxed_devenv import (
+    canary,
+    common,
+    config,
+    control_creds,
+    control_driver,
+    control_images,
+    control_inventory,
+    remote,
+    render,
+)
 
 CHECKOUT = pathlib.Path(__file__).resolve().parent.parent
 PUBKEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA test"
@@ -132,6 +143,9 @@ class FakeBackend:
         self.checkouts = set()
         self.project_yaml = "project: p\ngit:\n  user_name: D\n  user_email: d@example.invalid\n"
         self.inputs = []
+        self.command_path = "/usr/local/bin/sandboxed-devenv"
+        self.canary_fail = False
+        self.version = "sandboxed-devenv 0.1.0"
 
     def key_record(self, name):
         generation = self.generation.get(name, 0)
@@ -151,6 +165,8 @@ class FakeBackend:
     def status(self):
         retdict = {
             "hostname": self.vm_name, "ready": True, "package_version": "0.1.0", "ssh_host_keys": list(HOST_KEYS),
+            "cloud_init": {"status": "done", "detail": ""},
+            "ide_backend": {"installed": {"name": "IntelliJ IDEA", "version": "2026.2.3", "build": "262.1"}, "registered": True},
             "repositories": [self.key_record(name) for name in self.repositories],
         }
         return retdict
@@ -163,12 +179,18 @@ class FakeBackend:
     def run(self, remote_command, check=True, capture=False, timeout=None, quiet=False, input=None):
         self.calls.append(("run", tuple(remote_command)))
         stdout = ""
+        status = 0
         if remote_command[:2] == ["sudo", "cat"]:
             stdout = self.project_yaml
         if remote_command[:2] == ["sudo", "tee"]:
             self.project_yaml = input
             self.inputs.append(input)
-        retval = subprocess.CompletedProcess(remote_command, 0, stdout, "")
+        if "canary" in remote_command:
+            stdout = canary_json_lines("backend", self.canary_fail)
+            status = 1 if self.canary_fail else 0
+        if remote_command[-1] == "--version":
+            stdout = self.version + "\n"
+        retval = subprocess.CompletedProcess(remote_command, status, stdout, "")
         return retval
 
     def tool(self, args, sudo=False, parse_json=False, check=True, json_flag=True):
@@ -205,17 +227,65 @@ class FakeBackend:
         return retlist
 
 
+def canary_json_lines(role: str, fail: bool = False) -> str:
+    """What the canary prints with `--json --expect` on a healthy machine of the role, or with
+    one failing probe."""
+    lines = [json.dumps({"canary": {"role": role, "user": "gw" if role == "client" else "dev", "host_home": None}})]
+    expected = canary.expected_for(role)
+    for pattern, allowed in expected.items():
+        name = pattern[:-1] + "x" if pattern.endswith("*") else pattern
+        lines.append(json.dumps({"status": allowed[0], "name": name, "detail": "as expected"}))
+    mismatches = []
+    counts = {"pass": sum(1 for v in expected.values() if v[0] == "PASS"), "fail": 0,
+              "info": sum(1 for v in expected.values() if v[0] == "INFO")}
+    if fail:
+        lines.append(json.dumps({"status": "FAIL", "name": "wayland", "detail": "no socket"}))
+        mismatches.append("wayland: FAIL, expected PASS (no socket)")
+        counts["fail"] = 1
+    lines.append(json.dumps({"expect": {"source": "packaged", "mismatches": mismatches}}))
+    lines.append(json.dumps({"summary": counts}))
+    retval = "\n".join(lines) + "\n"
+    return retval
+
+
 class FakeClient:
     def __init__(self):
         self.calls = []
         self.target = "jsw@192.168.64.10"
+        self.host = "192.168.64.10"
+        self.command_path = "/usr/local/bin/sandboxed-devenv"
         self.fail = False
+        self.drift = False
+        self.canary_fail = False
+        self.ssh_fail = False
+        self.version = "sandboxed-devenv 0.1.0"
 
     def tool(self, args, sudo=False, parse_json=False, check=True, json_flag=True):
         self.calls.append((tuple(args), sudo))
         if self.fail:
             raise remote.RemoteError("boom")
         retval = subprocess.CompletedProcess(args, 0, "", "")
+        return retval
+
+    def run(self, command, check=True, capture=False, timeout=None, quiet=False, input=None):
+        self.calls.append(("run", tuple(command)))
+        stdout = ""
+        stderr = ""
+        status = 0
+        if "--check" in command:
+            status = 1 if self.drift else 0
+            stdout = "host install: check: 0 changed, 17 unchanged, 1 would change, 0 failed\n" if self.drift else \
+                "host install: check: 0 changed, 18 unchanged, 0 would change, 0 failed\n"
+        elif "check" in command:
+            stdout = canary_json_lines("client", self.canary_fail)
+            status = 1 if self.canary_fail else 0
+        elif command[:3] == ["sudo", "-u", "gw"]:
+            status = 255 if self.ssh_fail else 0
+            stdout = "" if self.ssh_fail else "idesbx-backend\n"
+            stderr = "Host key verification failed." if self.ssh_fail else ""
+        elif command[-1] == "--version":
+            stdout = self.version + "\n"
+        retval = subprocess.CompletedProcess(command, status, stdout, stderr)
         return retval
 
 
@@ -294,9 +364,10 @@ def rig(tmp_path, monkeypatch):
     images.mkdir()
     name = control_images.image_name(common.package_version())
     control_images.disk_path(name).write_bytes(b"\0" * 4096)
-    record = control_images.ImageRecord(name=name, driver="utm", architecture="aarch64", package_version=common.package_version(),
-                                        ide_backend_version="2026.2.3", ubuntu_release="26.04", ubuntu_image_serial="20260927",
-                                        cloudinit_sha256="0" * 64, disk_gib=32)
+    user_config = config.load_user_config()
+    digest_user_data = render.cloudinit_document("backend", "cloudinit-image", "user-data",
+                                                 control_images.seed_values(user_config, PUBKEY))
+    record = control_images.wanted_record(config.load_versions(), user_config, common.architecture(), digest_user_data, "utm")
     control_images.record_path(name).write_text(record.to_yaml())
     driver = FakeDriver()
     backends = {}
