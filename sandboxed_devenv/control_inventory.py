@@ -10,6 +10,7 @@ Every control command that needs a backend finds it here by the project's name; 
 takes a VM name.
 """
 
+import dataclasses
 import datetime
 import ipaddress
 import json
@@ -170,15 +171,32 @@ def address_answers(address: str, timeout: float = PROBE_TIMEOUT) -> bool:
     return retval
 
 
-def allocate_address(user_config: config.UserConfig, probe=None, report=print) -> str:
-    """The lowest free address of the UTM pool: not in the inventory, not the client host's or
-    the image build's, and not answering on port 22 (an older VM the inventory never saw)."""
+@dataclasses.dataclass
+class AddressPool:
+    """What a driver's VM network offers: the subnet, the first address backends take, the
+    build VM's address, and addresses never handed out (the gateway, the client host)."""
+
+    subnet: str
+    start: str
+    build_address: str
+    reserved: set = dataclasses.field(default_factory=set)
+
+
+def utm_pool(user_config: config.UserConfig) -> AddressPool:
+    utm = user_config.utm
+    retval = AddressPool(subnet=utm.subnet, start=utm.address_pool_start, build_address=utm.image_build_address,
+                         reserved={utm.client_host_address, utm.image_build_address, utm.gateway})
+    return retval
+
+
+def allocate_address(pool: AddressPool, probe=None, report=print) -> str:
+    """The lowest free address of the pool: not in the inventory, not reserved, and not
+    answering on port 22 (an older VM the inventory never saw)."""
     if probe is None:
         probe = address_answers
-    utm = user_config.utm
-    network = ipaddress.ip_network(utm.subnet)
-    reserved = used_addresses() | {utm.client_host_address, utm.image_build_address, utm.gateway}
-    candidate = ipaddress.ip_address(utm.address_pool_start)
+    network = ipaddress.ip_network(pool.subnet)
+    reserved = used_addresses() | set(pool.reserved)
+    candidate = ipaddress.ip_address(pool.start)
     retval = None
     while candidate in network and candidate != network.broadcast_address:
         text = str(candidate)
@@ -190,5 +208,5 @@ def allocate_address(user_config: config.UserConfig, probe=None, report=print) -
                 break
         candidate += 1
     if retval is None:
-        raise InventoryError(f"no free address in {utm.subnet} from {utm.address_pool_start} upward")
+        raise InventoryError(f"no free address in {pool.subnet} from {pool.start} upward")
     return retval
