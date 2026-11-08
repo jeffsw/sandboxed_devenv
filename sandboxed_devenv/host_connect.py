@@ -104,6 +104,9 @@ def register(subparsers):
     add.add_argument("address", metavar="ADDRESS", help="the backend's address")
     add.add_argument("hostkeys", metavar="HOSTKEY", nargs="+",
                      help="the backend's SSH host public keys (`type base64`, quoted), pinned in known_hosts")
+    add.add_argument("--force", action="store_true",
+                     help="write the Gateway entry even while Gateway runs; Gateway may drop it on exit, or pick it up "
+                          "when its window regains focus (PLAN.md M3, to find out)")
     add.set_defaults(handler=cmd_add)
 
     rm = connect.add_parser("rm", help="remove a project's stanza, pinned keys and Gateway entry; needs root")
@@ -326,7 +329,8 @@ def cmd_add(args) -> int:
         sync_file(paths.known_hosts, with_pinned_keys(read_text(paths.known_hosts) or "", args.address, keys).encode(),
                   paths.user, paths.group, 0o644, apply),
     ]
-    if gateway_running(paths):
+    running = gateway_running(paths)
+    if running and not args.force:
         print(common.warning(
             f"{command}: Gateway is running as {paths.user}, and it rewrites {paths.ssh_configs.name} when it exits, "
             f"so its entry is not written. Add the connection in Gateway's window (host {args.address}, user "
@@ -334,6 +338,10 @@ def cmd_add(args) -> int:
             flush=True)
         outcomes.append(Outcome(f"file {paths.ssh_configs}", UNCHANGED, "Gateway is running; entry not written"))
     else:
+        if running:
+            print(common.warning(f"{command}: Gateway is running as {paths.user}; writing its entry anyway (--force). Give "
+                                 "Gateway's window focus and look for the connection; if it is gone after Gateway exits, "
+                                 "Gateway rewrote the file from memory."), flush=True)
         content = ssh_configs_with(read_text(paths.ssh_configs), args.project, args.address, paths.gateway_branch)
         outcomes.append(sync_file(paths.ssh_configs, content.encode(), paths.user, paths.group, 0o600, apply))
     retval = finish(command, outcomes, args.dry_run)
