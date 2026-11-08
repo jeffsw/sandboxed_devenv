@@ -97,6 +97,10 @@ class Driver(typing.Protocol):
         """A copy of the stopped VM's first disk at ``dest``; `image build` ends with it."""
         ...
 
+    def resources(self, name: str) -> tuple[int, int] | None:
+        """(CPUs, memory in GiB) as the hypervisor has them, or None when it cannot say."""
+        ...
+
     def set_resources(self, name: str, cpus: int | None, memory_gib: int | None) -> None:
         """Change a stopped VM's CPUs and memory."""
         ...

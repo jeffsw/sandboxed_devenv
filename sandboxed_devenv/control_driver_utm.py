@@ -1,6 +1,6 @@
 """The UTM driver for the Mac rig: utmctl, osascript, plutil, hdiutil (control role, M2).
 
-Ported from rehearsal/utm/create-vms.sh and make-seed.sh (summary 4.9). What the rig learned
+Ported from the rig's create-vms.sh and make-seed.sh, deleted at M2 (summary 4.9). What the rig learned
 about UTM 4.7.5 with the Apple Virtualization backend, kept here with dates:
 
 - 8 October 2026: a removable drive is referenced by path, and UTM, a sandboxed app, cannot
@@ -287,6 +287,14 @@ class UtmDriver:
         completed = self.runner.run(apfs_clone_command(source, dest), capture_output=True)
         if completed.returncode != 0:
             shutil.copyfile(source, dest)
+
+    def resources(self, name: str) -> tuple[int, int] | None:
+        """From the bundle's config.plist: System.CPUCount and System.MemorySize (MiB)."""
+        system = self.read_config(name).get("System") or {}
+        retval = None
+        if "CPUCount" in system and "MemorySize" in system:
+            retval = (int(system["CPUCount"]), int(system["MemorySize"]) // 1024)
+        return retval
 
     def set_resources(self, name: str, cpus: int | None, memory_gib: int | None) -> None:
         if cpus is None and memory_gib is None:
