@@ -79,8 +79,15 @@ def secrets_dir() -> pathlib.Path:
 
 
 def images_dir() -> pathlib.Path:
-    """Base images on UTM: ``backend-<version>.img``, raw disks that each backend is cloned from."""
+    """Base images on UTM: ``backend-<version>.img``, raw disks that each backend is cloned from,
+    each with a ``backend-<version>.yaml`` beside it saying what went into it."""
     retval = home_dir() / "images"
+    return retval
+
+
+def downloads_dir() -> pathlib.Path:
+    """Downloaded cloud images, kept so a rebuild of the base image fetches nothing."""
+    retval = home_dir() / "downloads"
     return retval
 
 
@@ -119,6 +126,9 @@ class UtmConfig(pydantic.BaseModel):
     nameserver: str = "192.168.64.1"
     client_host_address: str = "192.168.64.10"
     address_pool_start: str = "192.168.64.20"
+    # The one boot of the base image under `image build`: below the pool, above desk, so a build
+    # never collides with a project's backend.
+    image_build_address: str = "192.168.64.19"
     # The virtio NIC's name under UTM's Apple backend; the netplan match must be exact.
     interface: str = "enp0s1"
 

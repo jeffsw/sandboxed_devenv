@@ -2,11 +2,43 @@
 
 One deploy key pair per repository inside the backend, registered on GitHub from here and
 revoked before anything is deleted; the inventory keeps every key's GitHub id and state.
+From M2 this module also mints the rig key pair, the one credential every VM creation needs.
 """
 
-from sandboxed_devenv import common
+import pathlib
+import socket
+
+from sandboxed_devenv import common, remote
 
 ALL_REPOSITORIES = "ALL"
+RIG_KEY_COMMENT_USER = "gw"
+
+
+def ensure_rig_key(runner: common.Runner | None = None) -> pathlib.Path:
+    """The rig key pair in the secrets directory, minted on first use: ed25519, no passphrase, so
+    `image build` and `new` can log into a VM they just booted. The client sandbox gets the same
+    pair as /home/gw/.ssh/vm_ed25519 (`host install`), which is why the comment names gw."""
+    runner = runner or common.Runner()
+    retval = remote.rig_key_path()
+    if not retval.is_file():
+        secrets = retval.parent
+        secrets.mkdir(parents=True, exist_ok=True)
+        secrets.chmod(0o700)
+        comment = f"{RIG_KEY_COMMENT_USER}@{socket.gethostname()}"
+        completed = runner.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", str(retval)])
+        if completed.returncode != 0:
+            raise remote.RemoteError(f"ssh-keygen failed with status {completed.returncode}")
+        print(f"rig key pair created: {retval} (comment {comment}); every VM made from now on trusts it")
+    return retval
+
+
+def rig_public_key() -> str:
+    """The public half, one line, for cloud-init's ssh_authorized_keys."""
+    path = remote.rig_key_path().with_suffix(".pub")
+    if not path.is_file():
+        raise remote.RemoteError(f"no public key at {path} beside the rig key")
+    retval = path.read_text().strip()
+    return retval
 
 
 def register(subparsers):
