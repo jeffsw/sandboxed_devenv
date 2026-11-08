@@ -573,8 +573,8 @@ Parity with today's rig, then the old scripts go.
       both entries and the header comment, so Gateway did not rewrite it at all. The IDE
       platform reloads application-level option files changed on disk when its window
       regains focus. `connect add` and `connect rm` now write the file whether or not
-      Gateway runs and say that a click on the window makes the change appear; the
-      `--force` flag of the experiment is gone. This closes the Gateway half of the M3
+      Gateway runs and say, in bold yellow so it is seen, to click another window and then
+      Gateway's; the `--force` flag of the experiment is gone. This closes the Gateway half of the M3
       gate: `new` needs no manual Gateway step either way.
 - [x] Split the rig key in two. Until 8 November one pair, `secrets/gw_ed25519`, was both
       the control side's login to every VM (desk as `jsw`, backends as `dev`) and gw's key
@@ -657,8 +657,8 @@ Parity with today's rig, then the old scripts go.
       side sees a pipe; `NO_COLOR` honoured). Extend it to the other warning-like lines:
       a failed registration or `connect` in `new`, pending revocations in `rm` and `ls`,
       the leftover build VM in `image build`, `resources` announcing a stop, unclaimed
-      keys in `creds audit`. (The running-Gateway notice itself is a plain note since
-      8 November, when the entry turned out to work under a running Gateway.)
+      keys in `creds audit`. (The running-Gateway line stays bold yellow although nothing
+      is wrong, because the user has something to do: defocus and refocus the window.)
 - [x] Static verification in CI: schema, AppArmor and nftables parsers, shell, Python,
       YAML, workflow, doc rules and Mermaid rendering.
 
