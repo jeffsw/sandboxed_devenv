@@ -162,13 +162,23 @@ def step_files(ctx: Context) -> list[Outcome]:
 
 
 def step_key_pair(ctx: Context) -> list[Outcome]:
-    private = ctx.secrets_dir / config.RIG_KEY_NAME
-    public = ctx.secrets_dir / f"{config.RIG_KEY_NAME}.pub"
+    """gw's key to the backends: the sandbox key pair from the secrets directory. A legacy
+    gw_ed25519 pair there is used with a warning, since it is also the control key."""
+    private = ctx.secrets_dir / config.SANDBOX_KEY_NAME
+    retlist = []
+    if not private.is_file():
+        legacy = ctx.secrets_dir / config.LEGACY_RIG_KEY_NAME
+        if legacy.is_file():
+            private = legacy
+            retlist.append(Outcome("gw key pair", UNCHANGED, common.warning(
+                f"using the legacy {legacy.name}, which is also the control key; `sandboxed-devenv client-host provision` "
+                f"from the control machine puts the sandbox key here")))
+    public = private.with_suffix(".pub")
     if not (private.is_file() and public.is_file()):
         retlist = [Outcome("gw key pair", FAILED,
-                           f"no {private} and {public.name}; the rig key pair belongs in {ctx.secrets_dir} (mode 0700)")]
+                           f"no {private} and {public.name}; the sandbox key pair belongs in {ctx.secrets_dir} (mode 0700)")]
         return retlist
-    retlist = [
+    retlist += [
         sync_file(GW_KEY, private.read_bytes(), GW_USER, GW_USER, 0o600, ctx.apply),
         sync_file(GW_KEY.with_suffix(".pub"), public.read_bytes(), GW_USER, GW_USER, 0o644, ctx.apply),
     ]
@@ -297,7 +307,7 @@ def plan_lines(values: dict[str, str], secrets_dir: pathlib.Path) -> list[str]:
         dest = render.rendered_dest(entry, values)
         retlist.append(f"file {dest} ({entry.owner}:{entry.group} {entry.mode}): {entry.description}")
     retlist.extend([
-        f"gw key pair: {GW_KEY} and .pub from {secrets_dir / config.RIG_KEY_NAME}",
+        f"gw key pair: {GW_KEY} and .pub from {secrets_dir / config.SANDBOX_KEY_NAME}",
         f"apparmor: apparmor_parser --replace {APPARMOR_PROFILE}",
         "sysctl: sysctl --system (net.ipv4.ip_forward = 1)",
         f"nftables: nft --check {NFTABLES_CONF}; the service stays disabled until policy enables it",

@@ -315,8 +315,11 @@ def prepare_disk(cloud_image: pathlib.Path, disk: pathlib.Path, disk_gib: int, r
 # --- the build -----------------------------------------------------------------------------------
 
 
-def seed_values(user_config: config.UserConfig, public_key: str) -> dict[str, str]:
-    retdict = render.default_values(user_config, RIG_PUBKEY=public_key, ADDRESS=user_config.utm.image_build_address)
+def seed_values(user_config: config.UserConfig, public_key: str, host_key: dict[str, str] | None = None) -> dict[str, str]:
+    """The image seed's values: the control key for dev, the build address, and the host key pair,
+    or the fixed digest values when the document is rendered only to be hashed."""
+    retdict = render.default_values(user_config, CONTROL_PUBKEY=public_key, ADDRESS=user_config.utm.image_build_address)
+    retdict.update(host_key or render.HOST_KEY_DIGEST_VALUES)
     return retdict
 
 
@@ -387,15 +390,11 @@ def build(args) -> int:
     driver = control_driver.load_driver(runner)
     cpus = args.cpus or user_config.backend.cpus
     memory_gib = args.memory_gib or user_config.backend.memory_gib
-    if args.dry_run:
-        public_key = control_creds.rig_public_key() if remote.rig_key_path().is_file() else "ssh-ed25519 (minted on the real run)"
-    else:
-        control_creds.ensure_rig_key(runner)
-        public_key = control_creds.rig_public_key()
+    public_key = control_creds.seed_key_values(args.dry_run, runner)["CONTROL_PUBKEY"]
     values = seed_values(user_config, public_key)
-    user_data = render.cloudinit_document("backend", "cloudinit-image", "user-data", values)
+    digest_user_data = render.cloudinit_document("backend", "cloudinit-image", "user-data", values)
     network_config = render.cloudinit_document("backend", "cloudinit", "network-config", values)
-    wanted = wanted_record(versions, user_config, architecture, user_data, driver.name)
+    wanted = wanted_record(versions, user_config, architecture, digest_user_data, driver.name)
     reasons = rebuild_reasons(load_record(wanted.name), wanted)
     if args.force:
         reasons.append("--force")
@@ -436,11 +435,15 @@ def build(args) -> int:
         prepare_disk(cloud_image, disk, wanted.disk_gib, runner)
     seed_dir = build_dir / "seed"
     instance_id = f"{IMAGE_HOSTNAME}-{datetime.datetime.now(datetime.UTC).strftime('%Y%m%d%H%M%S')}"
+    host_private, host_public = remote.generate_host_key(IMAGE_HOSTNAME)
+    user_data = render.cloudinit_document("backend", "cloudinit-image", "user-data",
+                                          seed_values(user_config, public_key, render.host_key_values(host_private, host_public)))
     render.write_seed(seed_dir, user_data, instance_id, IMAGE_HOSTNAME, network_config)
 
     vm = build_vm_name(user_config)
     remove_leftover(driver, vm)
     remote.forget_host_keys(vm)
+    remote.pin_host_key(vm, user_config.utm.image_build_address, host_public)
     with common.slow_step(COMMAND, "create", f"UTM copies the {wanted.disk_gib} GiB disk and the seed ISO into the bundle of {vm}"):
         driver.create(VmSpec(name=vm, disk=disk, cpus=cpus, memory_gib=memory_gib, seed_dir=seed_dir))
     disk.unlink()
@@ -458,7 +461,7 @@ def build(args) -> int:
     except (RemoteError, DriverError) as error:
         print(f"{COMMAND}: failed: {error}", file=sys.stderr)
         print(f"{COMMAND}: the build VM {vm} is left as it is for inspection: `utmctl status {vm}`, "
-              f"`ssh -i {remote.rig_key_path()} -o IdentitiesOnly=yes dev@{user_config.utm.image_build_address}`, "
+              f"`ssh -i {remote.control_key_path()} -o IdentitiesOnly=yes dev@{user_config.utm.image_build_address}`, "
               f"`utmctl delete {vm}`; the next `image build` removes it", file=sys.stderr)
         shutil.rmtree(build_dir, ignore_errors=True)
         retval = 1
