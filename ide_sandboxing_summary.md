@@ -1,9 +1,10 @@
 # Keeping an IDE away from your keys: options summary and decision notes
 
-Updated 17 October 2026, revision 11. This is the design record for the sandboxed development environment, organised around the design chosen on 8 October: **JetBrains Gateway with its thin client in a small sandbox and the IDE backend in a virtual machine, one VM per project or a disposable one.** The rehearsal rig of 4.9 is built and its first two steps passed on 9 October: the JetBrains Client and the Gateway launcher both run on the Wayland toolkit as a second Unix user under GNOME. Everything else is untested. Figures were read from GitHub, npm, JetBrains documentation and the Mac itself on 7 to 9 October and will go stale. The earlier brainstorming document in this repository, `ide_sandboxing.html`, is kept for history only; what it contributed is restated or cited directly here.
+Updated 8 November 2026, revision 12. This is the design record for the sandboxed development environment, organised around the design chosen on 8 October: **JetBrains Gateway with its thin client in a small sandbox and the IDE backend in a virtual machine, one VM per project or a disposable one.** The rehearsal rig of 4.9 is built and its first two steps passed on 9 October: the JetBrains Client and the Gateway launcher both run on the Wayland toolkit as a second Unix user under GNOME. Everything else is untested. Figures were read from GitHub, npm, JetBrains documentation and the Mac itself on 7 to 9 October and will go stale. The earlier brainstorming document in this repository, `ide_sandboxing.html`, is kept for history only; what it contributed is restated or cited directly here.
 
 ## Revision history
 
+- Revision 12 (8 November): 4.9 rewritten for the package. The rig scripts under `rehearsal/utm/` are gone; `sandboxed-devenv image build`, `client-host new`, `new`, `clone` and `rm` do what they did, with one backend VM per project at an address from a pool, routes to both halves of the VM subnet on `desk`, the connection written for `gw` and Gateway by `connect add`, and an inventory under `~/.sandboxed_devenv/`. The egress policy moved to `policy.yaml`; only address ranges reach the ruleset, since nft refuses a host name that resolves to several addresses. Registering deploy keys on GitHub is the one manual step left (PLAN.md, M3).
 - Revision 11 (17 October): the repository gained `mise run verify` and a GitHub Actions workflow that runs it on every push: the seeds are rendered without building ISOs, then checked with `cloud-init schema`, the AppArmor and nftables parsers, shellcheck, ruff, yamllint, actionlint, this document's house rules and a render of each Mermaid diagram. The client AppArmor profiles lose their `@{exec_path}` rule, which only AppArmor 5 declares. The "Fresh VMs" block in 4.9 now revokes and re-registers the deploy key, which a rebuilt backend mints anew.
 - Revision 10 (9 October, evening): a consolidated pass after a day in the rig. The backend template now installs the everyday tools, `gh` from GitHub's repository, the Claude Code plugin, GitHub's host keys, a git identity and Claude Code's settings with an optional token from `keys/`; the desk template gives the private X server an authorization cookie; the canary checks the SSH client config; the start-up diagrams show `gw-session`, the X server and the pre-provisioned connection. Findings of the day recorded in 4.3, 4.4, 4.5 and 4.9: the embedded browser's needs, the key-access dialog, plugin staging, the settings-file trap, the login callback.
 - Revision 9 (9 October): the rehearsal rig was built and debugged on the Mac (findings recorded in 4.9: UTM's sandbox and scripting gaps, the dracut and NetworkManager interaction, VM isolation on the shared network), and steps 1 and 2 of 4.9 passed: GNOME accepts the second user's Wayland connection, the 2026.2.3 client reports `sun.awt.wl.WLToolkit`, and so does the Gateway launcher with its one VM options line. Open questions answered accordingly; Gateway's stored SSH connection added to the desk template. The canary script was written and run in both roles; its first run showed the second user could reach D-Bus, PipeWire and other sockets in the real user's runtime directory, so `gw-run` now closes them with ACLs (4.3). The embedded browser turned out to need both an X display and an AppArmor profile on the launcher (4.3).
@@ -346,7 +347,7 @@ flowchart LR
 
 ### 4.9 The rehearsal rig on the Mac
 
-Before the Framework arrives, the design is rehearsed in two Ubuntu 26.04 VMs on the current Mac. VM `desk` plays the Framework host: GNOME on Wayland, the client sandbox as user `gw`, and the egress allowlist. VM `backend` plays a per-project VM: the IntelliJ backend installed from the tarball and registered, a `dev` user, and a deploy key.
+Before the Framework arrives, the design is rehearsed in Ubuntu 26.04 VMs on the current Mac, driven by the same `sandboxed-devenv` command the Framework will run (PLAN.md). VM `desk` plays the Framework host: GNOME on Wayland, the client sandbox as user `gw`, and the egress allowlist. One VM per project, `idesbx-<project>`, plays the backend: the IntelliJ backend installed from the tarball and registered, a `dev` user, and a deploy key per repository. The rig was first built from shell scripts (8 and 9 October); the findings below are from that build, and the scripts became the package's UTM driver at M2 (8 November).
 
 **The Mac can run it.** Checked on 8 October; no macOS upgrade is needed.
 
@@ -357,17 +358,17 @@ Before the Framework arrives, the design is rehearsed in two Ubuntu 26.04 VMs on
 | Disk | 611 GB free | About 20 GB: the cloud image, two raw disks and the seeds |
 | UTM | Not installed | `brew install --cask utm` (4.7.5 on 8 October), or the DMG from the UTM site; the App Store copy only adds automatic updates |
 | `qemu-img` | Not installed | `brew install qemu`, used once to convert the cloud image to raw; the Apple backend accepts raw disk images only |
-| Memory plan | | `desk` 8 GB, `backend` 8 GB, 16 GB left for macOS; four vCPUs each |
+| Memory plan | | `desk` 8 GB and 8 GB per backend (the defaults in `config.yaml`; `new --memory-gib` and `resources` change them), the rest for macOS; four vCPUs each |
 
-**Building the two VMs from cloud-init.** The files are in this repository under `rehearsal/utm/`: a `user-data` template, `meta-data` and `network-config` per VM; `make-seed.sh`, which generates the `gw` key pair once, renders the templates and writes the two NoCloud seed ISOs with `hdiutil`; and `create-vms.sh`, which registers the VMs in UTM. The disk is Ubuntu's stock server cloud image, `ubuntu-26.04-server-cloudimg-arm64.img` (serial 20260927, 902 MB; QCOW2 despite the name). There is no desktop cloud image, so `desk` installs `ubuntu-desktop-minimal` through cloud-init, which takes a while on first boot.
+**Building the VMs from cloud-init.** Everything a VM receives lives in the package under `sandboxed_devenv/files/`, one directory per role, with the cloud-init documents beside the files (PLAN.md, "Files and templates"). `image build` makes the base image: Ubuntu's stock server cloud image (`ubuntu-26.04-server-cloudimg-arm64.img`, serial 20260927, 902 MB; QCOW2 despite the name) fetched and checked against its `SHA256SUMS`, converted to a raw disk and grown to 32 GB (sparse), booted once with the image cloud-init, the package pushed over SSH and installed, `cloud-init clean`, powered off, kept as `~/.sandboxed_devenv/images/backend-<version>.img` with a record of what went in. `client-host new` makes `desk` the same way from the host cloud-init, then over SSH installs the package, places the rig key pair and runs `host install`. `new PROJECT` makes a backend: UTM imports the base image (an APFS clone, seconds) with a seed rendered for the project, and the first boot runs `backend prepare`. There is no desktop cloud image, so `desk` installs `ubuntu-desktop-minimal` through cloud-init, which takes a while on first boot.
 
-What each file sets up:
+What each VM gets:
 
-- `desk`: user `jsw` with a password for the GDM login (`rehearsal`, unless `DESK_PASSWORD` was set when running `make-seed.sh`; the rendered value is in `build/desk-seed/user-data`), passwordless sudo and the rig key authorized for SSH checks from the Mac; `spice-vdagent` for clipboard sharing with the Mac, which also needs UTM's clipboard setting on, something the script does since the scripting interface cannot; user `gw` with no sudo and no password, lingering enabled so it has a runtime directory, the Gateway 2026.2.2 tarball unpacked in its home with the toolkit line from 4.6 added, the `vm_ed25519` key and an `ssh_config` that knows only `backend`; `/usr/local/bin/gw-run`, which lends the session's Wayland socket to `gw` with `setfacl`, closes the other sockets in the runtime directory and becomes `gw` to run `gw-session`, which starts a private Xwayland with an authorization cookie for the embedded browser and then Gateway; and `gw-exec`, which runs any command with the same environment. None of them uses a login shell: `sudo --login` passes its command through `bash -c`, which expands every `$variable` before the target user runs it (found 9 October); the AppArmor profiles for the client's Chromium; the canary; an `nftables` allowlist for the backend, written but not enabled; IP forwarding on. Reboots into GNOME when done.
-- `backend`: user `dev` whose only login is `gw`'s public key; sshd with passwords and agent forwarding off, and an `ssh_config` that never consults an agent; the IntelliJ IDEA Ultimate 2026.2.3 tarball under `/opt/jetbrains/idea`, registered with `registerBackendLocationForGateway`, with the Claude Code plugin installed into it; a JDK, Python, build tools, `uv`, `mise`, `direnv`, `just`, `ripgrep`, `jq` and `gh` from GitHub's repository; GitHub's SSH host keys; a git identity copied from the Mac's; a deploy key generated at first boot and printed on the console; Claude Code with its settings, carrying the token from `keys/claude_oauth_token` when that file exists; the canary. The architecture is detected, so the same file serves the arm64 VMs on the Mac and, as the base image's cloud-init, the x86-64 VMs on the Framework.
-- Both: a static address on UTM's shared network, `desk` at 192.168.64.10 and `backend` at 192.168.64.20, so the `ssh_config` entry and the allowlist can name them, plus a host route to the other VM through the Mac (192.168.64.1). The route is needed because UTM's shared network marks each VM's port on the Mac's bridge "private", which blocks traffic between VMs at layer 2 while the Mac itself can reach both and forwards between them (found 9 October: `desk` could not ARP for `backend`). The interface is named exactly, `enp0s1`, and the renderer is pinned to systemd-networkd. Both come from the first `desk`, which came up on a DHCP address twice (9 October): the desktop install brings NetworkManager and makes it netplan's default renderer, NetworkManager does not accept a glob such as `en*`, and even with the exact name it never applied the static profile, because Ubuntu 26.04's dracut initramfs leaves a catch-all DHCP rule in `/run/systemd/network` that systemd-networkd, still enabled, acts on first; NetworkManager then treats the NIC as externally configured. With the networkd renderer, netplan's own `10-netplan-enp0s1.network` sorts ahead of that rule, which is why `backend` never had the problem.
+- `desk`: user `jsw` with a password for the GDM login (`rehearsal`, unless `DESK_PASSWORD` was set when running `client-host new`), passwordless sudo and the rig key authorized for SSH from the Mac; `spice-vdagent` for clipboard sharing with the Mac, which also needs UTM's clipboard setting on, something the driver does since the scripting interface cannot; then `host install`: user `gw` with no sudo and no password, lingering enabled so it has a runtime directory, the Gateway 2026.2.2 tarball unpacked in its home with the toolkit line from 4.6 added, the `vm_ed25519` key and an `ssh_config` that includes one stanza per project from `config.d/`, written by `connect add`; the `client start` / `client session` / `client exec` subcommands (what `gw-run`, `gw-session` and `gw-exec` did: lend the session's Wayland socket to `gw` with `setfacl`, close the other sockets in the runtime directory, a private Xwayland with an authorization cookie for the embedded browser, then Gateway; no login shell, since `sudo --login` passes its command through `bash -c`, which expands every `$variable` before the target user runs it, found 9 October); the AppArmor profiles for the client's Chromium; the `nftables` ruleset from `policy.yaml`, written but not enabled; IP forwarding on. Reboots into GNOME when done.
+- Each backend: user `dev` whose only login is `gw`'s public key; sshd with passwords and agent forwarding off, and an `ssh_config` that never consults an agent; the IntelliJ IDEA Ultimate 2026.2.3 tarball under `/opt/jetbrains/idea`, registered with `registerBackendLocationForGateway`, with the Claude Code plugin installed into it; a JDK, Python, build tools, `uv`, `mise`, `direnv`, `just`, `ripgrep`, `jq` and `gh` from GitHub's repository (all from the base image); then at first boot `backend prepare`: GitHub's SSH host keys, the git identity from the Mac's config (or `config.yaml`), a deploy key pair per repository with an alias stanza binding it, Claude Code's settings carrying the token from `~/.sandboxed_devenv/secrets/claude_oauth_token` when that file exists. The architecture is detected, so the same documents serve the arm64 VMs on the Mac and, as the base image's cloud-init, the x86-64 VMs on the Framework.
+- Both: a static address on UTM's shared network, `desk` at 192.168.64.10 and the backends from 192.168.64.20 upward, so the `ssh_config` stanzas and the allowlist can name them. UTM's shared network marks each VM's port on the Mac's bridge "private", which blocks traffic between VMs at layer 2 while the Mac itself can reach both and forwards between them (found 9 October: `desk` could not ARP for `backend`), so `desk` carries routes to both halves of the subnet, 192.168.64.0/25 and 192.168.64.128/25, through the Mac (192.168.64.1): more specific than its on-link route, and no per-backend change. Each backend has one host route back to `desk`. The interface is named exactly, `enp0s1`, and the renderer is pinned to systemd-networkd. Both come from the first `desk`, which came up on a DHCP address twice (9 October): the desktop install brings NetworkManager and makes it netplan's default renderer, NetworkManager does not accept a glob such as `en*`, and even with the exact name it never applied the static profile, because Ubuntu 26.04's dracut initramfs leaves a catch-all DHCP rule in `/run/systemd/network` that systemd-networkd, still enabled, acts on first; NetworkManager then treats the NIC as externally configured. With the networkd renderer, netplan's own `10-netplan-enp0s1.network` sorts ahead of that rule, which is why `backend` never had the problem.
 
-**On the Mac.** Each command is preceded by what it does. Long option names are used wherever the tool has them; macOS ships BSD `mkdir`, `rm` and `ssh-keygen`, which have none, and `qemu-img` has none for its format flags.
+**On the Mac.** Each command is preceded by what it does.
 
 ```sh
 # Install UTM, the hypervisor front end, and QEMU, needed only for qemu-img,
@@ -375,166 +376,114 @@ What each file sets up:
 brew install --cask utm
 brew install qemu
 
-# Work inside the rehearsal directory of this repository.
-cd rehearsal/utm
+# The package, from the checkout, as one command on the PATH.
+uv tool install ~/proj/ide_sandbox/sandboxed_devenv
 
-# Fetch Ubuntu's stock 26.04 arm64 server cloud image (902 MB). The file is
-# QCOW2 despite its .img name.
-curl --location --remote-name https://cloud-images.ubuntu.com/releases/26.04/release/ubuntu-26.04-server-cloudimg-arm64.img
+# Name desk as the client host; everything else has a default (PLAN.md, M2).
+# `sandboxed-devenv doctor` shows what the Mac can do and what the state
+# directory holds.
+mkdir -p ~/.sandboxed_devenv
+printf 'client_host: ssh://jsw@192.168.64.10\n' > ~/.sandboxed_devenv/config.yaml
 
-# Optional: a Claude Code token for the backend, minted here where the SSO
-# session is, so the VM never sees a login flow (4.4). Paste the token printed by
-# "claude setup-token" into keys/claude_oauth_token (gitignored) before building.
+# Optional: a Claude Code token for the backends, minted here where the SSO
+# session is, so a VM never sees a login flow (4.4). One file per secret, mode
+# 0700 on the directory, never inside the checkout.
 claude setup-token
+mkdir -p ~/.sandboxed_devenv/secrets && chmod 700 ~/.sandboxed_devenv/secrets
+# paste the token into ~/.sandboxed_devenv/secrets/claude_oauth_token
 
-# Generate the client sandbox's key pair (once, kept in keys/), render the two
-# cloud-init templates, and build the NoCloud seed ISOs under build/. The git
-# identity for commits inside the VM is read from this Mac's git config.
-./make-seed.sh
+# The base image. The rig key pair is minted on first use. About two minutes;
+# a second run says the image is up to date.
+sandboxed-devenv image build
 
-# Convert the cloud image into one raw disk per VM. In qemu-img, -f is the
-# source format and -O the output format; there is no long form.
-qemu-img convert -f qcow2 -O raw ubuntu-26.04-server-cloudimg-arm64.img build/desk.raw
-qemu-img convert -f qcow2 -O raw ubuntu-26.04-server-cloudimg-arm64.img build/backend.raw
-
-# Grow each disk to 40 GB. The file stays sparse on APFS; cloud-init grows the
-# partition and filesystem on first boot.
-qemu-img resize -f raw build/desk.raw 40G
-qemu-img resize -f raw build/backend.raw 40G
-
-# Register both VMs in UTM from the raw disks and seed ISOs: Apple backend,
-# four cores, 8 GB, one shared network, a serial console, and a display for
-# desk. UTM copies each disk and seed into its own bundle, so build/ stays
-# pristine and needs no access grant.
-./create-vms.sh
+# The client host VM: cloud-init installs the desktop, then over SSH the
+# package, the rig key pair and `host install`; reboots into GNOME. Ten
+# minutes or more. Log in at its UTM window as jsw afterwards.
+sandboxed-devenv client-host new
 ```
 
-The seed files are verified without a VM by `mise run verify` (also GitHub's CI on every push): `make-seed.sh --render-only` renders them, cloud-init validates their schema, `apparmor_parser` and `nft` check the profile and the allowlist, and shellcheck, ruff, yamllint, actionlint, the doc rules and the Mermaid CLI cover the rest. `create-vms.sh` drives UTM's AppleScript interface through `osascript`. Its first version attached the seed as a removable drive, and the VM would not start: UTM is a sandboxed app, a removable drive is referenced by path, and a path handed over by script carries no access grant, so UTM reported "Cannot access resource" (8 October). The script now attaches the seed as a second non-removable drive, which UTM imports into the VM bundle just like the raw disk; cloud-init finds the seed by its `cidata` label on any block device, and the disk stays first so EFI boots from it. A second gap in the scripting interface: it cannot set the keyboard and pointer, and a scripted VM gets both "Disabled", so the first `desk` showed GNOME's greeter with no cursor and took no input (9 October). The script now sets `Keyboard` to Generic and `Pointer` to Mouse in the bundle's `config.plist` with `plutil`, then makes UTM re-read it: newer UTM versions have a reload command for exactly this case, 4.7.5 does not, so the script quits and relaunches UTM, which re-reads every bundle. Run it with no VM running. No step in the UTM window is needed. Verified on 8 October: `backend` booted, took its static address, and reported `DataSourceNoCloud [seed=/dev/vdb]` with no errors, the IDE backend registered and the deploy key generated, about three minutes after `utmctl start`. If the script fails outright, do the whole thing in the UTM window: create a Linux VM with Apple Virtualization, four cores and 8 GB; in its drive settings remove the blank disk the wizard made, import the raw image as the disk, and add the seed ISO as a removable drive; leave the network on Shared; give `backend` a serial device and `desk` a display, and check under Virtualization that `desk` has a keyboard and a pointer.
+Every document is verified without a VM by `mise run verify` (also GitHub's CI on every push): `sandboxed-devenv render` writes them under `build/`, cloud-init validates their schema, `apparmor_parser` and `nft` check the profile and the ruleset, and shellcheck, ruff, yamllint, actionlint, the doc rules, the Mermaid CLI and pytest cover the rest. The UTM driver (`control_driver_utm.py`) drives UTM's AppleScript interface through `osascript`, and its docstring keeps what the rig learned. The first version attached the seed as a removable drive, and the VM would not start: UTM is a sandboxed app, a removable drive is referenced by path, and a path handed over by script carries no access grant, so UTM reported "Cannot access resource" (8 October). The seed is now a second non-removable drive, which UTM imports into the VM bundle just like the disk; cloud-init finds the seed by its `cidata` label on any block device, and the disk stays first so EFI boots from it. A second gap in the scripting interface: it cannot set the keyboard and pointer, and a scripted VM gets both "Disabled", so the first `desk` showed GNOME's greeter with no cursor and took no input (9 October). The driver sets `Keyboard` to Generic and `Pointer` to Mouse in the bundle's `config.plist` with `plutil`, then makes UTM re-read it: newer UTM versions have a reload command for exactly this case, 4.7.5 does not, so the driver quits and relaunches UTM, which re-reads every bundle. Run `client-host new` with no other VM running for that reason. No step in the UTM window is needed. The import of a drive turned out to be an APFS clone: a backend is created from the 32 GB base image in under a second and shares its blocks (8 November).
 
-**Running the rig.** `utmctl` is UTM's command-line tool; the Homebrew cask links it into `/opt/homebrew/bin`. VMs are addressed by name.
+**Running the rig.** Every command takes the project's name; `utmctl list` shows the VMs as `idesbx-<project>`.
 
 ```sh
-# List every VM UTM knows, with its status.
-utmctl list
+# A project's backend: UTM imports the base image with a seed naming the
+# project, its repositories, the git identity and the token, at the next free
+# address of the pool. Waits for SSH and for `backend status` to report ready
+# (about a minute), pins the host keys on desk with `connect add`, records
+# everything in ~/.sandboxed_devenv/inventory/, and prints the deploy keys the
+# backend minted, one per repository, for registration below.
+sandboxed-devenv new ide_sandbox --repo jeffsw/sandboxed_devenv
 
-# Status of one VM: stopped, starting, started, paused or stopping.
-utmctl status backend
+# Register each printed key on its repository (M3 automates this and the
+# revocation), then clone inside the backend.
+gh repo deploy-key add KEYFILE --repo jeffsw/sandboxed_devenv --title idesbx-ide_sandbox
+sandboxed-devenv ssh ide_sandbox -- sandboxed-devenv backend repo add jeffsw/sandboxed_devenv
 
-# First boot of backend. utmctl starts it headless: nothing opens in UTM's
-# window, and utmctl attach is not implemented in UTM 4.7.5. Reachability
-# (ping, then SSH below) is the quickest sign of life; the seed sets the
-# static address early in boot.
-utmctl start backend
-ping -c 2 192.168.64.20
+# The projects with their backend's state, address, resources and repositories.
+sandboxed-devenv ls
 
-# Optional console: the Apple backend's serial port is a pseudo-terminal on the
-# Mac. Ask UTM for its path, then open it with screen (quit with ctrl-a k).
-osascript -e 'tell application "UTM" to get address of first serial port of virtual machine named "backend"'
-screen /dev/ttys009
+# A shell as dev with the rig key, or one command after --. No shell expansion.
+sandboxed-devenv ssh ide_sandbox
+sandboxed-devenv ssh ide_sandbox -- cloud-init status
 
-# First boot of desk: its window opens in UTM. cloud-init installs the desktop,
-# then reboots into the GDM login by itself; expect ten minutes or more.
-utmctl start desk
+# The serial console through UTM's pty, for when SSH is not up (quit with ctrl-a k).
+sandboxed-devenv serial-console ide_sandbox
 
-# Check on either VM from the Mac with the rig key (jsw on desk, dev on backend).
-# cloud-init reports done when provisioning finished; desk also shows its GDM
-# session. ssh has no long options.
-ssh -o IdentitiesOnly=yes -i keys/gw_ed25519 jsw@192.168.64.10 'cloud-init status; loginctl list-sessions'
-ssh -o IdentitiesOnly=yes -i keys/gw_ed25519 dev@192.168.64.20 'cloud-init status'
+# Lifecycle. stop asks the guest to shut down and waits; --force pulls the plug.
+sandboxed-devenv stop ide_sandbox
+sandboxed-devenv start ide_sandbox
 
-# Fetch backend's deploy key using the client sandbox's key, which the Mac holds
-# in keys/ because it was generated there, and register it on the test
-# repository. Read-only unless --allow-write is added. ssh has no long options.
-ssh -o IdentitiesOnly=yes -i keys/gw_ed25519 dev@192.168.64.20 'cat ~/.ssh/deploy_ed25519.pub' > build/backend-deploy.pub
-gh repo deploy-key add build/backend-deploy.pub --repo owner/test-repo --title backend-vm
+# CPUs and memory: shown, or changed with the backend stopped (it asks first;
+# --yes answers for scripts).
+sandboxed-devenv resources ide_sandbox
+sandboxed-devenv resources ide_sandbox --cpus 6 --memory-gib 12
 
-# Optional, on the Mac: a stanza for ~/.ssh/config.d/ (or above "Host *" in
-# ~/.ssh/config, since the first match wins) that neither records nor verifies
-# host keys for the rehearsal VMs, whose keys change on every rebuild, and that
-# supplies the rig key, so the -o and -i flags above can be dropped.
-#
-#   Host 192.168.64.*
-#       StrictHostKeyChecking no
-#       UserKnownHostsFile /dev/null
-#       GlobalKnownHostsFile /dev/null
-#       LogLevel ERROR
-#       IdentityFile ~/proj/ide_sandbox/sandboxed_devenv/rehearsal/utm/keys/gw_ed25519
-#       IdentitiesOnly yes
-#       ForwardAgent no
-
-# Stop a VM. --request asks the guest to shut down cleanly, which is what you
-# want; --force, UTM's default, pulls the plug; --kill terminates the process.
-# A request can take minutes if a systemd stop job is waiting on its timeout;
-# "sudo systemctl poweroff" over SSH is the same thing with the console visible.
-utmctl stop backend --request
-utmctl stop desk --request
-
-# Step 8: a throwaway copy of backend. Stop backend first, since the clone keeps
-# its address. Delete is immediate and unconfirmed.
-utmctl clone backend --name backend-tmp
-utmctl start backend-tmp
-utmctl stop backend-tmp --request
-utmctl delete backend-tmp
+# Step 8: a disposable copy with fresh deploy keys. The source is stopped for a
+# consistent copy of its disk and started again afterwards.
+sandboxed-devenv clone ide_sandbox scratch
+sandboxed-devenv rm scratch --yes
 ```
+
+On `desk`, `sudo sandboxed-devenv connect ls` shows the stanzas and pinned keys that `new` wrote for `gw`, and `sandboxed-devenv client start` in the GNOME session runs Gateway as `gw` (`host check` runs the canary there).
 
 **Fresh VMs.** The VMs are disposable by design; replacing them costs a few minutes plus the first-boot provisioning.
 
 ```sh
-# Stop and delete both VMs. The disks UTM copied go with them; build/ still
-# holds the pristine raw images and the seeds.
-utmctl stop desk --request
-utmctl stop backend --request
-utmctl delete desk
-utmctl delete backend
+# A backend: delete it (the connection on desk goes too) and make it again. A
+# rebuilt backend mints new deploy keys, so the keys GitHub holds for the old
+# one are dead; revoke them with `gh repo deploy-key delete` until M3 does.
+sandboxed-devenv rm ide_sandbox --yes
+sandboxed-devenv new ide_sandbox --repo jeffsw/sandboxed_devenv
 
-# Only if a template or a version changed: rebuild the seeds. keys/ is reused,
-# so backend's authorized key stays the same. Rebuilding never touches an
-# existing VM, since each VM holds its own copy of the seed.
-./make-seed.sh
+# The base image, after a version or template change (image build notices
+# both by itself; --force rebuilds regardless). Existing backends keep theirs.
+sandboxed-devenv image build --force
 
-# Register fresh VMs from the pristine raw disks and the seeds.
-./create-vms.sh
-
-# Start them again and wait for cloud-init, as under "Running the rig" above.
-utmctl start backend
-utmctl start desk
-
-# A rebuilt backend mints a new deploy key at first boot, so the key GitHub
-# holds for the old VM is dead. Revoke it, then register the new one the same
-# way as the first time. The rig key still opens the VM, since keys/ was reused.
-gh repo deploy-key list --repo owner/test-repo
-gh repo deploy-key delete <key-id> --repo owner/test-repo
-ssh -o IdentitiesOnly=yes -i keys/gw_ed25519 dev@192.168.64.20 'cat ~/.ssh/deploy_ed25519.pub' > build/backend-deploy.pub
-gh repo deploy-key add build/backend-deploy.pub --repo owner/test-repo --title backend-vm
-
-# To re-run cloud-init inside an existing VM instead (seed ISO still attached):
-#   sudo cloud-init clean --logs --reboot
+# A fresh desk. gw's Gateway state and the client download go with the old one.
+sandboxed-devenv client-host new --replace
 ```
 
 **Clean-up.** When the rehearsal is over.
 
 ```sh
-# Stop and delete the VMs. No confirmation.
-utmctl stop desk --request
-utmctl stop backend --request
-utmctl delete desk
-utmctl delete backend
+# Every project, then desk, then the base image. rm asks; --yes answers.
+sandboxed-devenv ls
+sandboxed-devenv rm ide_sandbox --yes
+sandboxed-devenv client-host rm --yes
+sandboxed-devenv image rm backend-0.1.0
 
-# Revoke the deploy key on the test repository.
-gh repo deploy-key list --repo owner/test-repo
-gh repo deploy-key delete <key-id> --repo owner/test-repo
+# Revoke the deploy keys on the repositories (until M3 does it with rm).
+gh repo deploy-key list --repo jeffsw/sandboxed_devenv
+gh repo deploy-key delete <key-id> --repo jeffsw/sandboxed_devenv
 
-# Remove the generated key pair, seeds and raw disks (all gitignored) and the
-# downloaded cloud image. BSD rm has no long options.
-rm -r keys build
-rm ubuntu-26.04-server-cloudimg-arm64.img
-
-# Forget the VMs' SSH host keys, which the Mac learned when fetching the deploy key.
-ssh-keygen -R 192.168.64.10
-ssh-keygen -R 192.168.64.20
+# The state directory: inventory, images, the downloaded cloud image, the
+# known host keys and the secrets (the rig key pair, the token).
+rm -r ~/.sandboxed_devenv
 
 # Optional: remove the tools. --zap also removes UTM's data directory under
 # ~/Library/Containers, where the VM bundles lived.
+uv tool uninstall sandboxed-devenv
 brew uninstall --cask --zap utm
 brew uninstall qemu
 ```
@@ -551,45 +500,47 @@ flowchart LR
     en0["en0 192.168.0.130"]
     vmnet["vmnet shared network, bridge100<br/>192.168.64.1: NAT, DHCP, DNS"]
     subgraph utm["UTM, Apple Virtualization"]
-      desk["desk 192.168.64.10<br/>GNOME on Wayland, user gw with Gateway and Client,<br/>nftables allowlist and NAT for backend"]
-      be["backend 192.168.64.20<br/>IDE backend, toolchain, deploy key<br/>default route via desk from step 7"]
+        desk["desk 192.168.64.10<br/>GNOME on Wayland, user gw with Gateway and Client,<br/>nftables ruleset from policy.yaml, routes to both /25 halves via the Mac"]
+      be["idesbx-&lt;project&gt; 192.168.64.20 upward<br/>IDE backend, toolchain, a deploy key per repository<br/>default route via desk from step 7"]
     end
   end
   desk -- "SSH 22 as dev, forwarded by the Mac" --> be
   be -. "egress, forwarded only to the allowlist" .-> desk
+  mac_ctl["sandboxed-devenv on the Mac: image build, client-host new, new, clone, rm"] -. "SSH with the rig key" .-> desk
+  mac_ctl -. "SSH with the rig key" .-> be
   desk --> vmnet
   vmnet --> en0 --> rt --> inet
   inet --> gh
   inet --> jb
 ```
 
-How it maps to the Framework: `desk` is the host, the shared network is Incus's bridge, and the `nftables` table written on `desk` moves to the host unchanged apart from the interface name. Three differences are worth knowing. The VMs cannot talk to each other directly on UTM's shared network (the bridge ports are private), so every packet between `desk` and `backend` is forwarded by the Mac through the host routes above; on the Framework the client sandbox and the VMs share the host directly. Step 7 lifts the isolation with `sudo ifconfig bridge100 -private vmenet0 vmenet1`, which lasts until a VM restarts, because routing `backend` through `desk` needs them adjacent. On the Mac both VMs sit on the same shared network, so `backend` could switch its default route back to 192.168.64.1 and bypass the allowlist; that is accepted for a functional rehearsal and does not exist on the Framework, where a VM's only path out is through the host. And the shared network's gateway answers DNS for `backend` directly, so names resolve even when the allowlist drops the address. If a faithful egress test matters before the Framework, UTM's QEMU backend offers a host-only network with no path out, at the cost of a slower VM.
+How it maps to the Framework: `desk` is the host, the shared network is Incus's bridge, and the `nftables` ruleset written on `desk` moves to the host unchanged apart from the uplink interface name, which the Framework's copy of `policy.yaml` sets. Three differences are worth knowing. The VMs cannot talk to each other directly on UTM's shared network (the bridge ports are private), so every packet between `desk` and `backend` is forwarded by the Mac through the host routes above; on the Framework the client sandbox and the VMs share the host directly. Step 7 lifts the isolation with `sudo ifconfig bridge100 -private vmenet0 vmenet1`, which lasts until a VM restarts, because routing `backend` through `desk` needs them adjacent. On the Mac both VMs sit on the same shared network, so `backend` could switch its default route back to 192.168.64.1 and bypass the allowlist; that is accepted for a functional rehearsal and does not exist on the Framework, where a VM's only path out is through the host. And the shared network's gateway answers DNS for `backend` directly, so names resolve even when the allowlist drops the address. If a faithful egress test matters before the Framework, UTM's QEMU backend offers a host-only network with no path out, at the cost of a slower VM.
 
 **Steps in the rig:**
 
-1. **Launch and connect.** Log in to `desk` as `jsw` and confirm the session is Wayland (`echo $XDG_SESSION_TYPE`). Once, accept `backend`'s host key for `gw`: `sudo -u gw -i ssh backend true`. Then `gw-run`. In the Gateway window: New connection, SSH, username `dev`, host 192.168.64.20, key pair `/home/gw/.ssh/vm_ed25519`; Gateway finds the registered backend and asks for a project directory. It downloads the matching JetBrains Client and opens the IDE window. Passed on 9 October; the connection Gateway stored is now part of the desk template, so a fresh `desk` has it already.
+1. **Launch and connect.** Log in to `desk` as `jsw` and confirm the session is Wayland (`echo $XDG_SESSION_TYPE`). Then `sandboxed-devenv client start`. In the Gateway window the backend's connection is already listed when `new` ran while Gateway was not running (host 192.168.64.20, user `dev`, key `/home/gw/.ssh/vm_ed25519`, host key pinned); otherwise New connection, SSH, with those values. Gateway finds the registered backend and asks for a project directory: `/home/dev/proj/<project>`. It downloads the matching JetBrains Client and opens the IDE window. Passed on 9 October with the rig scripts; `new` to a connected client is the M2 gate.
 2. **Toolkit.** Check Help, About, first in the Gateway window and then in the client; with a 2026.2 backend expect the Wayland toolkit in both. If the launcher reports X11, check its VM options line; if the client does, check the backend version. The private Xwayland in 4.6 is the fallback for either. Passed on 9 October: the client's About dialog reports `Toolkit: sun.awt.wl.WLToolkit` on GNOME Shell 50.1, and the launcher's `idea.log` records the same toolkit at start-up.
-3. **Canary.** On desk, as `jsw`, after `gw-run` has run in the session: `gw-exec canary --role client`. On backend, as `dev`: `canary --role backend`. Expect no FAIL lines; INFO lines are the measurements. Section 6 lists the probes and what each PASS means. Passed on 9 October in both roles, after the first run exposed the runtime-directory sockets that `gw-run` now closes (4.3): on desk, `gw` can read none of `jsw`'s secrets, reaches only the Wayland socket in `jsw`'s runtime directory, cannot connect to either X11 socket or `jsw`'s D-Bus, and has no GitHub key; on backend, GitHub answers with the test repository's name, so the deploy key is in place.
-4. **A real session.** A JVM project and a Python project, terminal, run and debug, a dev server through a forwarded port, Claude Code in the backend terminal, the plugins you depend on. Any project will do: a public repository cloned over HTTPS in the backend terminal needs no key at all; pushing needs the deploy key registered on a test repository (run block above). Started on 9 October: the project opens, the deploy key clones its one repository and nothing else, and the Markdown preview renders once the embedded browser has its private X server and its AppArmor profiles (4.3). Claude Code runs in the backend through the plugin, authenticated by a `setup-token` minted on the Mac and placed in the VM's settings (4.4); `/status` reports the token as the credential. One trap met on the way: an invalid `settings.json` (a missing comma) is ignored silently, and Claude Code then asks for a login as if no credential existed.
-5. **Forwarding and keys.** In the client, confirm SSH agent forwarding is off. In the backend terminal, confirm `ssh-add -l` finds no agent, that `ssh -T git@github.com` greets with the test repository's name (the deploy key, as the canary's INFO line also shows), that `git push` to that repository works, and that nothing else on GitHub is reachable with it.
-6. **Measure.** Backend RAM at rest and while indexing, time to first index for each project, time from VM start to a connected client.
-7. **Egress.** First, on the Mac, lift the isolation between the two VMs for the duration of the test: `sudo ifconfig bridge100 -private vmenet0 vmenet1` (member names from `ifconfig bridge100`; it resets when a VM restarts). A default route through `desk` needs `desk` reachable at layer 2, and the host routes of 4.9 do not make a gateway reachable. Then on `desk`, `sudo systemctl enable --now nftables`. On `backend`, change the default route in `/etc/netplan/50-cloud-init.yaml` to 192.168.64.10 and run `sudo netplan apply`. Confirm with `canary --role backend --deny example.com` that GitHub is reachable and the rest is dropped and logged on `desk`, and that the IDE session is unaffected, since it never leaves the shared network.
-8. **Disposable.** Clone `backend` with `utmctl` (commands above), connect to the clone from the same Gateway, delete the clone, and confirm nothing in `gw`'s home changed besides the recent-connections list.
+3. **Canary.** On desk, as `jsw`, after `client start` has run in the session: `sandboxed-devenv host check` (the canary as `gw`). On a backend, as `dev`: `sandboxed-devenv canary --role backend`. Expect no FAIL lines; INFO lines are the measurements. Section 6 lists the probes and what each PASS means. Passed on 9 October in both roles, after the first run exposed the runtime-directory sockets that `client start` now closes (4.3): on desk, `gw` can read none of `jsw`'s secrets, reaches only the Wayland socket in `jsw`'s runtime directory, cannot connect to either X11 socket or `jsw`'s D-Bus, and has no GitHub key; on backend, GitHub answers with the test repository's name, so the deploy key is in place. Rerun on 7 November on the rebuilt desk: 16 PASS, 0 FAIL.
+4. **A real session.** A JVM project and a Python project, terminal, run and debug, a dev server through a forwarded port, Claude Code in the backend terminal, the plugins you depend on. Any project will do: a public repository cloned over HTTPS in the backend terminal needs no key at all; pushing needs the deploy key registered with write access (`new --deploy-key-grants-repo-write`). Started on 9 October: the project opens, the deploy key clones its one repository and nothing else, and the Markdown preview renders once the embedded browser has its private X server and its AppArmor profiles (4.3). Claude Code runs in the backend through the plugin, authenticated by a `setup-token` minted on the Mac and placed in the VM's settings (4.4); `/status` reports the token as the credential. One trap met on the way: an invalid `settings.json` (a missing comma) is ignored silently, and Claude Code then asks for a login as if no credential existed.
+5. **Forwarding and keys.** In the client, confirm SSH agent forwarding is off. In the backend terminal, confirm `ssh-add -l` finds no agent, that `ssh -T git@github.com-<owner>-<repo>` greets with the repository's name (the deploy key, as the canary's INFO line also shows), that `git push` to that repository works, and that nothing else on GitHub is reachable with it.
+6. **Measure.** Backend RAM at rest and while indexing, time to first index for each project, time from VM start to a connected client. Measured so far: `image build` 103 s end to end and a backend ready about a minute after `new` (8 November).
+7. **Egress.** First, on the Mac, lift the isolation between the two VMs for the duration of the test: `sudo ifconfig bridge100 -private vmenet0 vmenet1` (member names from `ifconfig bridge100`; it resets when a VM restarts). A default route through `desk` needs `desk` reachable at layer 2, and the host routes of 4.9 do not make a gateway reachable. Then set `enforce: true` in `~/.sandboxed_devenv/policy.yaml` and run `sudo sandboxed-devenv host install` on `desk`, which enables `nftables`. On the backend, change the default route in `/etc/netplan/50-cloud-init.yaml` to 192.168.64.10 and run `sudo netplan apply`. Confirm with `sandboxed-devenv canary --role backend --deny example.com` that GitHub is reachable and the rest is dropped and logged on `desk`, and that the IDE session is unaffected, since it never leaves the shared network.
+8. **Disposable.** `sandboxed-devenv clone <project> scratch`, connect to the clone from the same Gateway, `sandboxed-devenv rm scratch`, and confirm nothing in `gw`'s home changed besides the recent-connections list and the stanza `connect` added and removed.
 
 If the client fails steps 1 and 2 and the private Xwayland is unacceptable, the fallback is the `waypipe` row in section 3: the full IDE in the VM with windows forwarded, which trades the thin client's limits for `waypipe`'s.
 
-**Manual steps from the rehearsal, to automate later.** Everything below was done by hand on the live VMs on 9 October. Items marked (templated) are already produced by the cloud-init files or `create-vms.sh` for fresh VMs; the rest still need a script, most naturally a `devenv new <repo>` command on the host.
+**Manual steps from the rehearsal, and where they stand.** Everything below was done by hand on the live VMs on 9 October. By 8 November the package does all of it except the first item.
 
-1. Register the backend's deploy key on the repository: fetch the public key over SSH with the rig key, then `gh repo deploy-key add` on the host; on a rebuild, `gh repo deploy-key delete` of the old VM's key first (commands under "Fresh VMs" above). Not templated; the natural first step of `devenv new`, and its last step when a VM goes.
-2. Install the Claude Code plugin on the backend. Done from the client's Plugins dialog ("Install on Frontend and Backend"), which stages both halves and needs the backend stopped (close the client, answer Yes to stopping the backend) and reconnected. Templated since the evening of 9 October: the backend cloud-init runs `remote-dev-server.sh installPlugins` for it, so a fresh backend has it before the first connection.
-3. Give Claude Code its credential. `claude setup-token` on the host, pasted into the `env` block of `/home/dev/.claude/settings.json`, file mode 0600. Templated since the evening of 9 October: `make-seed.sh` writes that file from `keys/claude_oauth_token` when present. Open question below: one token for all VMs or one per VM.
-4. The tool set on backend (`uv`, `mise`, `direnv`, `just`, `ripgrep`, `fd`, `jq`, `gh`, `pkg-config`, `libssl-dev`) and the `mise` and `direnv` hooks in `dev`'s `.bashrc` (templated since 9 October). Per-project secrets are a separate matter: rpkilog's `.envrc` on the Mac holds live cloud credentials and is gitignored, so it is absent from the VM's clone, which is right; a VM gets scoped equivalents, never the host's file.
-5. Gateway's SSH connection to the backend, accepted host key, `jsw`'s authorized key on desk, the inter-VM host routes, the networkd renderer, the exact NIC name (templated).
-6. Keyboard, pointer and clipboard sharing in the UTM configuration, `spice-vdagent` (templated, in `create-vms.sh` and the desk cloud-init).
-7. The deny ACLs on the runtime directory, the private Xwayland, the AppArmor profiles, `gw-session`, pinned `LANG`, no login shell (templated, in `gw-run`, `gw-exec`, `gw-session` and `/etc/apparmor.d/jetbrains-client`).
-8. The canary on both VMs and `gw-exec` (templated).
+1. Register the backend's deploy keys on their repositories, and revoke them when the backend goes. Still manual: `new` prints each key, `gh repo deploy-key add` registers it, `gh repo deploy-key delete` revokes it. M3 moves both into `new`, `repo add`, `rm` and `creds audit`.
+2. Install the Claude Code plugin on the backend. In the base image since 9 October: the image cloud-init runs `remote-dev-server.sh installPlugins` for it, so every backend has it before the first connection.
+3. Give Claude Code its credential. `claude setup-token` on the Mac, into `~/.sandboxed_devenv/secrets/claude_oauth_token`; `backend prepare` writes `/home/dev/.claude/settings.json` from `project.yaml` at first boot. Open question below: one token for all VMs or one per VM.
+4. The tool set on backend (`uv`, `mise`, `direnv`, `just`, `ripgrep`, `fd`, `jq`, `gh`, `pkg-config`, `libssl-dev`) and the `mise` and `direnv` hooks in `dev`'s `.bashrc`: in the base image. Per-project secrets are a separate matter: rpkilog's `.envrc` on the Mac holds live cloud credentials and is gitignored, so it is absent from the VM's clone, which is right; a VM gets scoped equivalents, never the host's file.
+5. Gateway's SSH connection to the backend, the pinned host key, `gw`'s stanza: `connect add`, run on `desk` by `new`. `jsw`'s authorized key on desk, the routes to both halves of the subnet, the networkd renderer, the exact NIC name: the host cloud-init.
+6. Keyboard, pointer and clipboard sharing in the UTM configuration, `spice-vdagent`: the UTM driver and the host cloud-init.
+7. The deny ACLs on the runtime directory, the private Xwayland, the AppArmor profiles, pinned `LANG`, no login shell: `client start`, `client session`, `client exec` and `/etc/apparmor.d/jetbrains-client`.
+8. The canary on both VMs: `sandboxed-devenv canary`, part of the package on every machine.
 
-**Troubleshooting notes from the rehearsal.** A VM started by `utmctl` shows nothing in UTM's window; check with ping and SSH. A desk that comes up on a DHCP address has lost the renderer or NIC-name fix (4.9). Chromium needs the private X server; if the preview is blank, check that `Xwayland :9` runs as `gw`. A Claude Code login prompt despite a configured token means `settings.json` is not valid JSON; it is ignored silently. A login started in the backend opens a callback port in the VM that the host's browser cannot reach; the token route avoids it. Snap noise in the `gw-run` terminal comes from something opening the Firefox snap as `gw`, which cannot use the borrowed socket, and is harmless. A plugin installed from the client stays staged until the backend is stopped and restarted. `sudo --login` expands `$variables` before the target user runs the command; never use it in the `gw` scripts.
+**Troubleshooting notes from the rehearsal.** A VM started by `utmctl` or `sandboxed-devenv` shows nothing in UTM's window; check with `sandboxed-devenv ls`, `ssh` and `serial-console`. A desk that comes up on a DHCP address has lost the renderer or NIC-name fix (4.9). Chromium needs the private X server; if the preview is blank, check that `Xwayland :9` runs as `gw`. A Claude Code login prompt despite a configured token means `settings.json` is not valid JSON; it is ignored silently. A login started in the backend opens a callback port in the VM that the host's browser cannot reach; the token route avoids it. Snap noise in the `client start` terminal comes from something opening the Firefox snap as `gw`, which cannot use the borrowed socket, and is harmless. A plugin installed from the client stays staged until the backend is stopped and restarted. `sudo --login` expands `$variables` before the target user runs the command; never use it in the `gw` scripts.
 
 ## 5. Credentials on the host: findings and a hardening plan
 

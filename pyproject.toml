@@ -36,7 +36,7 @@ dev = [
 python-preference = "system"
 
 [tool.setuptools]
-# Flat layout with tests/ and rehearsal/ beside the package: name the package rather than discover.
+# Flat layout with tests/ and ci/ beside the package: name the package rather than discover.
 packages = ["sandboxed_devenv"]
 
 [tool.setuptools.package-data]

@@ -1,0 +1,38 @@
+# sandboxed-devenv: the egress policy and the VM subnet (PLAN.md, M2). `render` turns it into
+# the client host's nftables ruleset, /etc/nftables.conf; `host install` writes that file and
+# enables the service only when `enforce` is true. A copy at ~/.sandboxed_devenv/policy.yaml
+# replaces this one, which is how the Linux laptop names its own uplink interface.
+#
+# Only `cidrs` reach the ruleset: nft resolves a host name when the rules load and refuses one
+# that resolves to several addresses, which every CDN does (found 8 November 2026 on desk).
+# The `hosts` lists record what each side needs until M5 settles how names are followed.
+vm_subnet: 192.168.64.0/24
+# The client host's interface toward the Internet; the backends' traffic is masqueraded out
+# of it. `en*` matches UTM's virtio NIC on desk; the laptop's is set in the user's copy.
+uplink_interface: "en*"
+enforce: false
+client:
+  # The client sandbox (user gw) reaches the VM subnet, the resolver, and the JetBrains hosts:
+  # the JetBrains Client download once per backend version, and the account hosts for the
+  # license check (summary, 4.8 step 8).
+  hosts:
+    - download.jetbrains.com
+    - download-cdn.jetbrains.com
+    - account.jetbrains.com
+    - plugins.jetbrains.com
+  ports: [443]
+backend:
+  # The backends, forwarded and masqueraded by the client host: GitHub over SSH and HTTPS.
+  # The four github.com "git" ranges from https://api.github.com/meta (read 8 October 2026);
+  # the API also lists per-region hosts, add them if GitHub stops answering.
+  cidrs:
+    - 140.82.112.0/20
+    - 143.55.64.0/20
+    - 185.199.108.0/22
+    - 192.30.252.0/22
+  hosts:
+    - pypi.org
+    - files.pythonhosted.org
+    - api.anthropic.com
+    - download.jetbrains.com
+  ports: [22, 443]

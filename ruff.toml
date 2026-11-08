@@ -1,5 +1,5 @@
-# Python in this repository is small, stdlib-only tooling: the canary, the
-# seed renderer and the mise tasks. Same defaults everywhere.
+# One package, its tests and the Python mise tasks. 160 is the hard stop; AGENTS.md
+# asks for 100, with 120 as the limit for new code.
 line-length = 160
 target-version = "py312"
 

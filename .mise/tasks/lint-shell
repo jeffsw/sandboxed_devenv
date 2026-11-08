@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-#MISE description="shellcheck + sh -n: the rig scripts and the bash tasks"
+#MISE description="shellcheck + bash -n: the bash tasks under .mise/tasks/"
 set -euo pipefail
 cd "$MISE_PROJECT_ROOT"
-files=(rehearsal/utm/make-seed.sh rehearsal/utm/create-vms.sh rehearsal/utm/provision-desk.sh)
+files=()
 # Tasks are extensionless; pick the shell ones by shebang.
 for t in .mise/tasks/*; do
     [ -f "$t" ] || continue

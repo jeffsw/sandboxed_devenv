@@ -181,6 +181,16 @@ def test_set_resources_only_on_a_stopped_vm():
     assert len(runner.commands) == 2
 
 
+def test_resources_reads_the_bundle_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(control_driver_utm, "UTM_DOCUMENTS", tmp_path)
+    (tmp_path / "x.utm").mkdir()
+    (tmp_path / "x.utm" / "config.plist").write_text("<plist/>")
+    runner = FakeRunner([(0, '{"System": {"CPUCount": 4, "MemorySize": 8192}}', ""), (0, '{"System": {}}', "")])
+    driver = control_driver_utm.UtmDriver(runner=runner)
+    assert driver.resources("x") == (4, 8)
+    assert driver.resources("x") is None
+
+
 def test_available_off_macos(monkeypatch):
     monkeypatch.setattr(control_driver_utm.platform, "system", lambda: "Linux")
     assert "macOS" in control_driver_utm.UtmDriver(runner=FakeRunner()).available()

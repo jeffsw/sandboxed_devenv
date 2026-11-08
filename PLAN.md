@@ -43,7 +43,7 @@ copied around and no remote configuration is edited by hand.
 
 | Role | On the Mac rig | On the Linux laptop | Subcommands |
 |---|---|---|---|
-| control | the Mac | the laptop | `image`, `new`, `ls`, `start`, `stop`, `rm`, `clone`, `resources`, `repo`, `ssh`, `serial-console`, `creds`, `test` |
+| control | the Mac | the laptop | `image`, `client-host`, `new`, `ls`, `start`, `stop`, `rm`, `clone`, `resources`, `repo`, `ssh`, `serial-console`, `creds`, `test` |
 | client host | the `desk` VM | the laptop | `host`, `client`, `connect` |
 | backend | each backend VM under UTM | each backend VM under Incus | `backend` |
 | any | every machine above | every machine above | `doctor`, `render`, `canary`, `--version` |
@@ -123,7 +123,8 @@ sandboxed_devenv/
   control_driver_utm.py          utmctl, osascript, plutil, hdiutil (from create-vms.sh, make-seed.sh)
   control_driver_incus.py        incus CLI with --format json
   control_images.py              image build / ls / rm
-  control_backends.py            new, ls, start, stop, rm, clone, ssh, serial-console: one backend per project
+  control_backends.py            new, ls, start, stop, rm, clone, resources, ssh, serial-console: one backend per project
+  control_client_host.py         client-host new / rm / ssh: the desk VM on the Mac rig (the Linux laptop is its own client host)
   control_inventory.py           backends and their credentials, one JSON file per project
   control_creds.py               mint, register, rotate, revoke (gh deploy keys, Claude token, gw key)
   control_testing.py             the headless provisioning harness
@@ -134,12 +135,13 @@ sandboxed_devenv/
   files/                         everything a role receives on disk, plus cloud-init; package data
     manifest.yaml                dest, owner, group, mode, template, stage, description per file
     host/
-      cloudinit__user-data.yaml.tmpl            the desk VM on the Mac rig: user, rig key; the push does the rest
+      cloudinit__user-data.yaml.tmpl            the desk VM on the Mac rig: user, rig key; `client-host new` does the rest
+      cloudinit__network-config.yaml.tmpl       desk's static address and the routes to both halves of the VM subnet
       etc__apparmor.d__jetbrains-client.apparmor
       etc__nftables.conf.tmpl
       etc__sysctl.d__99-vmrouter.conf
-      home__gw__.ssh__config.ssh_config.tmpl
-      home__gw__.config__JetBrains__JetBrainsGateway@@GATEWAY_BRANCH@@__options__sshConfigs.xml.tmpl
+      home__gw__.ssh__config.ssh_config         includes config.d/, where `connect add` writes one stanza per project
+      home__gw__.config__JetBrains__JetBrainsGateway@@GATEWAY_BRANCH@@__options__sshConfigs.xml.tmpl   empty; `connect add` fills it
     backend/
       cloudinit-image__user-data.yaml.tmpl      the base image: packages, IDE backend, plugin, tools
       cloudinit-project__user-data.yaml.tmpl    a project's backend: hostname, keys, project config, prepare
@@ -148,18 +150,20 @@ sandboxed_devenv/
       home__dev__.ssh__config.ssh_config
       home__dev__.claude__settings.json.tmpl
   versions.yaml                  Gateway, IDE backend, client, Ubuntu image serial; package data, so every install carries its pins
+  policy.yaml                    egress allowlists and the VM subnet; package data too, since `host install` on a VM reads it;
+                                 ~/.sandboxed_devenv/policy.yaml overrides it (the laptop's uplink interface)
 tests/                           pytest, one test module per package module, as in rpkilog
-ci/                              puppeteer config for the Mermaid check (from rehearsal/ci/)
+ci/                              puppeteer config for the Mermaid check (moved from rehearsal/ci/ at M2)
 docs/
   runbook.md                     install, new project, dispose, rotate, troubleshoot
   linux-laptop-install.md        the laptop's first day, step by step
-policy.yaml                      egress allowlists and the VM subnet
 ```
 
-`rehearsal/` goes away: its scripts are replaced by the package and deleted once M2
-reaches parity, the desk template becomes `files/host/cloudinit__user-data.yaml.tmpl`,
-and `rehearsal/ci/` moves to `ci/`. `ide_sandboxing_summary.md` stays the design record;
-its 4.9 commands get replaced by `sandboxed-devenv` equivalents at M2.
+`rehearsal/` went away at M2 (8 November): its scripts were replaced by the package (the
+UTM driver, `image build`, `client-host new`, `new`), the desk template became
+`files/host/cloudinit__user-data.yaml.tmpl`, and `rehearsal/ci/` moved to `ci/`.
+`ide_sandboxing_summary.md` stays the design record; its 4.9 commands are the
+`sandboxed-devenv` equivalents since revision 12.
 
 ### Files and templates
 
@@ -178,7 +182,9 @@ it is and whether it is rendered:
   decodes to the manifest's `dest`. The Gateway branch is the one case today.
 - **`manifest.yaml`** holds what a file cannot say about itself: `dest`, `owner`,
   `group`, `mode` (quoted, since YAML reads `0644` as octal), `template`, `description`,
-  and for backend files the `stage`, `image` or `project`.
+  for backend files the `stage`, `image` or `project`, and `keep` for a file written once
+  and then left to the command that manages it (Gateway's `sshConfigs.xml`, which
+  `connect add` fills).
 - **Each file opens with a header** naming its role and destination, such as
   `# sandboxed-devenv host: rendered to /etc/nftables.conf`; on line two of cloud-init
   documents, where `#cloud-config` comes first, and absent from JSON.
@@ -195,10 +201,13 @@ it is and whether it is rendered:
 | `sandboxed-devenv canary --role ROLE [--json]` | any | The probes for the client or backend role, run locally |
 | `sandboxed-devenv image build [--force] [--wheel PATH] [--cpus N] [--memory-gib N]` | control | Downloads the Ubuntu cloud image (checked against its SHA256SUMS), boots it once with the base cloud-init, waits for SSH and cloud-init, pushes and installs the wheel (built from the checkout unless `--wheel` names one), runs `backend prepare --stage image`, `cloud-init clean`, powers off, keeps the disk as the base image with a record of what went in. Skips the build when nothing changed; `--force` rebuilds |
 | `sandboxed-devenv image ls / rm` | control | Base images and their versions |
+| `sandboxed-devenv client-host new [--replace] [--wheel PATH] [--cpus N] [--memory-gib N]` | control | The desk VM on the Mac rig: the cloud image as a raw disk, the host cloud-init and network-config (static address, routes to both halves of the VM subnet), a VM with a display, then over SSH the wheel and `sudo pipx install --global`, the rig key pair into the host user's secrets directory, `sudo sandboxed-devenv host install`, a reboot into GNOME. Refuses when `client_host` is `local`: the laptop is its own client host |
+| `sandboxed-devenv client-host rm [--yes]` | control | Stops and deletes desk |
+| `sandboxed-devenv client-host ssh [CMD]` | control | A shell on desk as its host user with the rig key; with CMD, runs it there. No shell expansion |
 | `sandboxed-devenv new PROJECT [--repo OWNER/REPO]... [--disposable] [--deploy-key-grants-repo-write] [--cpus N] [--memory-gib N]` | control | Launches the backend for PROJECT from the base image with its own cloud-init, waits for `backend status` to report ready, runs `repo add` for each `--repo`, pins the host key, runs `connect add` on the client host, records everything in the inventory. `--repo` is optional and repeatable; repositories can be added later. `--disposable` marks the backend for stranger code, used once and destroyed (summary 4.7): `ls` flags it and `rm` takes no snapshot. `--deploy-key-grants-repo-write` applies to every `--repo` given and registers its key with write access (`gh repo deploy-key add --allow-write`) so the VM can push; the default key is read-only. `--cpus` and `--memory-gib` override the defaults in `config.yaml` (4 and 8) |
-| `sandboxed-devenv ls` | control | Projects with their backend's state, address, CPUs and memory, repositories, package version, credential ages |
-| `sandboxed-devenv start / stop / rm PROJECT` | control | Lifecycle of the project's backend; `rm` revokes every credential the inventory lists and runs `connect rm`, then deletes the VM |
-| `sandboxed-devenv clone PROJECT NEW_PROJECT` | control | A disposable backend for NEW_PROJECT copied from PROJECT's; every repository in the copy gets a fresh key pair through `backend repo rekey`, registered under the new project's name |
+| `sandboxed-devenv ls [--json]` | control | Projects with their backend's state, address, CPUs and memory, repositories, package version, credential ages |
+| `sandboxed-devenv start / stop [--force] / rm [--yes] PROJECT` | control | Lifecycle of the project's backend. `stop` asks the guest to shut down and waits, forcing it after a timeout or with `--force`. `rm` asks first (`--yes` for scripts), revokes every credential the inventory lists (M3), runs `connect rm` on the client host, then deletes the VM and the inventory record |
+| `sandboxed-devenv clone PROJECT NEW_PROJECT [--yes]` | control | A disposable backend for NEW_PROJECT copied from PROJECT's disk (the source is stopped for a consistent copy, with a question first, and started again after); the copy boots with its own seed and instance id, so hostname, address, host keys and project.yaml are its own, and every repository in it gets a fresh key pair through `backend repo rekey`, registered under the new project's name (M3) |
 | `sandboxed-devenv resources PROJECT [--cpus N] [--memory-gib N] [--yes]` | control | Shows the backend's CPUs and memory, or changes them. Applied live where the driver can; otherwise the command asks before stopping and starting the backend, and `--yes` answers for scripts. Disk size is future work |
 | `sandboxed-devenv repo add PROJECT OWNER/REPO [--deploy-key-grants-repo-write] [--no-clone]` | control | Mints a key pair for the repository in the VM (`backend repo add`), registers it with `gh repo deploy-key add`, records it in the inventory, clones to `~/proj/PROJECT/REPO` |
 | `sandboxed-devenv repo rm PROJECT OWNER/REPO [--delete-checkout]` | control | Revokes the key on GitHub, then removes it and its alias stanza in the VM; the checkout stays unless asked |
@@ -411,41 +420,97 @@ Parity with today's rig, then the old scripts go.
       run taught: the `~` in a remote path is never expanded because the command reaches
       the far shell quoted, and the IDE registration signal is the `userProvidedDist`
       symlink in `dev`'s cache, not the daemon's database.
-- [ ] `sandboxed-devenv new`, `ls`, `start`, `stop`, `rm`, `clone`, `ssh`,
-      `serial-console` working on the Mac with the UTM driver: `new` copies the base
-      image (an APFS clone, instant and block-sharing) and creates the VM through
-      AppleScript with the copy, the project's seed ISO, and the CPUs and memory asked
-      for; the per-project seed rendered from `cloudinit-project__user-data.yaml.tmpl`;
-      readiness from `backend status`.
-- [ ] Slow steps announce themselves: before copying a base image, downloading a cloud
-      image, or waiting for a first boot, `new`, `clone` and `image build` print what
-      they are doing and why it takes time (for a copy: the size and whether the
-      filesystem shares blocks), then the elapsed time when the step ends. The Incus
-      driver passes through Incus's own progress for copies. `common.slow_step()` does
-      this for `image build` (8 November); `new` and `clone` follow.
-- [ ] Routing on `desk` for several backends: the desk template carries two `/25` routes
-      via the Mac, more specific than the on-link `/24`, so every backend is reachable
-      without a per-backend change. Verified as part of the gate; the fallback is a `/32`
-      per backend added by `connect add`.
-- [ ] `sandboxed-devenv resources PROJECT`: show or change a backend's CPUs and memory
-      after creation. UTM: with the backend stopped, through the AppleScript configuration
-      update, or the plist edit and UTM relaunch the rig knows if 4.7.5 lacks it. Incus:
-      `incus config set` of `limits.cpu` and `limits.memory`, live where Incus allows.
-      When a stop is needed the command says so and asks before stopping and starting
-      the backend; `--yes` answers for scripts. The inventory and `ls` follow the change.
-- [ ] `host_connect.py`: `connect add PROJECT ADDRESS HOSTKEY` writes the Gateway
-      `sshConfigs.xml` entry (only when Gateway is not running, else print instructions),
-      the `Host` stanza in `gw`'s `ssh_config` and the pinned host key in `known_hosts`;
-      `connect rm`, `connect ls`. `new` and `rm` call it through `remote.py`.
-- [ ] `policy.yaml`: client egress (VM subnet, JetBrains download and account hosts),
-      backend egress (GitHub, package indexes, Anthropic), the VM subnet.
-      `sandboxed-devenv render` produces the host nftables ruleset from it; on the Mac the
-      same ruleset lands on `desk` for the client half only, since UTM's private shared
-      network cannot route the VMs through `desk` (known gap, Linux laptop only).
-- [ ] Replace the 4.9 command blocks in the summary with `sandboxed-devenv` commands;
-      delete `rehearsal/utm/` (`make-seed.sh`, `create-vms.sh`, `render.py` and the
-      templates) and the `lint-shell` task with it; move `rehearsal/ci/` to `ci/`; the
-      mise `render` and `schema` tasks call `sandboxed-devenv render`.
+- [x] `sandboxed-devenv new`, `ls`, `start`, `stop`, `rm`, `clone`, `ssh`,
+      `serial-console` working on the Mac with the UTM driver: `new` hands the base
+      image itself to the driver, whose import is an APFS clone (instant and
+      block-sharing, confirmed 8 November), with the project's seed ISO and the CPUs and
+      memory asked for; the per-project seed rendered from
+      `cloudinit-project__user-data.yaml.tmpl` with a hostname derived from the VM name
+      (underscores become hyphens); readiness from `backend status`; the address from the
+      pool, skipping what the inventory holds and anything answering on port 22 (an older
+      VM the inventory never saw). The inventory record is saved before the VM starts, so
+      a failed `new` leaves something `rm` cleans up. `clone` exports the source's disk
+      (stopped for the copy, with a question first) and launches it with a new seed and
+      instance id, then rekeys every repository. Run on the Mac on 8 November against the
+      base image of that morning: `new` ready in 17 s (import 0 s, SSH after 5 s, prepare
+      11 s), `clone` in 9 s with a different key fingerprint in the copy, `stop` in 2 s,
+      `resources` applied through UTM's configuration update and seen inside the guest
+      (1 CPU, 3 GiB), `rm` of both with their connections gone from desk. One bug found
+      by the first clone: the `backend repo` commands take no `--json` flag, so
+      `Remote.tool()` gained `json_flag`. The gate run (a desk from `client-host new`,
+      `new sandboxed_devenv --repo jeffsw/sandboxed_devenv`, Gateway connected) found two
+      things: the project directory did not exist before the first clone, so Gateway had
+      nothing to open (`backend prepare` now makes `~dev/proj/<project>` at first boot),
+      and the registration hint now prints the fetch, `gh repo deploy-key add` and
+      `backend repo add` commands with the real names.
+- [x] `control_inventory.py` arrives with it (planned for M3): the project record with
+      the backend side filled, and `repos` with the fingerprints and public keys the
+      backend minted, state `unregistered` until M3 registers them.
+- [x] Slow steps announce themselves: before copying a base image, downloading a cloud
+      image, or waiting for a first boot, `new`, `clone`, `client-host new` and
+      `image build` print what they are doing and why it takes time (for a copy: the
+      size and whether the filesystem shares blocks), then the elapsed time when the
+      step ends. The Incus driver passes through Incus's own progress for copies (M5).
+      `common.slow_step()` does it everywhere. Done 8 November.
+- [x] Routing on `desk` for several backends: the desk network-config
+      (`files/host/cloudinit__network-config.yaml.tmpl`, moved into the package) carries
+      two `/25` routes via the Mac, more specific than the on-link `/24`, so every
+      backend is reachable without a per-backend change. Written 8 November and
+      verified the same day with the two routes added live on the existing desk: gw
+      reached a backend at `.21` through its `connect` stanza, with the pinned key and no
+      prompt. A desk built by `client-host new` carries them from its first boot; that
+      build is the one step of M2 not yet run (below). The fallback would be a `/32` per
+      backend added by `connect add`.
+- [x] `sandboxed-devenv resources PROJECT`: show or change a backend's CPUs and memory
+      after creation. UTM: shows what the bundle's `config.plist` says and changes it
+      with the backend stopped through the AppleScript configuration update. Incus:
+      `incus config set` of `limits.cpu` and `limits.memory`, live where Incus allows
+      (M5). When a stop is needed the command says so and asks before stopping and
+      starting the backend; `--yes` answers for scripts. The inventory and `ls` follow
+      the change. Done 8 November.
+- [x] `host_connect.py`: `connect add PROJECT ADDRESS HOSTKEY...` writes a stanza per
+      project under `/home/gw/.ssh/config.d/` (`Host <project> <address>`, user dev,
+      gw's key, strict host key checking; gw's `ssh_config` includes the directory), the
+      pinned host keys in `known_hosts`, and the Gateway `sshConfigs.xml` entry, the
+      last only when Gateway is not running (it rewrites the file from memory on exit),
+      else it prints what to do in Gateway's window; `connect rm`, `connect ls [--json]`.
+      `new` and `rm` call it through `remote.py` as root on the client host; a failure
+      there is reported with the command to run by hand and does not fail `new`. The
+      `sshConfigs.xml` file in the manifest is now empty and marked `keep`, so `host
+      install` writes it once and never overwrites the entries. Done 8 November.
+- [x] `client-host new / rm / ssh` (`control_client_host.py`, not in the first plan): the
+      port of `provision-desk.sh` and the desk half of `create-vms.sh`, needed before
+      `rehearsal/` could go. The desk VM is `<vm_name_prefix>desk`, the login the user in
+      `client_host`, the address `utm.client_host_address`; the rig key pair goes into
+      the host user's secrets directory on desk, as the script did, because it is gw's
+      key to the backends. Written and dry-run on 8 November; not yet run for real: a VM
+      with a display needs the UTM relaunch for its input devices (4.7.5 has no reload
+      command), which must happen with no VM running, and the existing desk and the old
+      rehearsal backend were up. First real run: `sandboxed-devenv client-host new
+      --replace` with every VM stopped, then the Gateway connection of the gate.
+- [x] `policy.yaml`: client egress (VM subnet, JetBrains download and account hosts),
+      backend egress (GitHub, package indexes, Anthropic), the VM subnet, the uplink
+      interface and an `enforce` switch; package data beside `versions.yaml`, with
+      `~/.sandboxed_devenv/policy.yaml` overriding it, since `host install` on a VM has
+      no checkout. `sandboxed-devenv render` produces the host nftables ruleset from it,
+      in two halves: the forward chain for the backends and an output chain for the
+      sandbox user, matched by uid (nft resolves a user name when it parses the rules,
+      which fails wherever `gw` does not exist, such as CI; `host install` renders the real
+      uid after creating the user, `render` a placeholder). `render` without a rig key in
+      the secrets directory renders a placeholder key and says so, which is how CI runs
+      it. Only CIDRs reach the ruleset: nft resolves a host name at load time
+      and refuses one that resolves to several addresses, which every CDN does (found
+      8 November on desk), so the `hosts` lists are recorded and M5 decides the mechanism
+      (a resolver-fed set, or Incus network ACLs). On the Mac the same ruleset lands on
+      `desk`, where only the client half means anything, since UTM's private shared
+      network cannot route the VMs through `desk` (known gap, Linux laptop only). Done
+      8 November.
+- [x] Replace the 4.9 command blocks in the summary with `sandboxed-devenv` commands
+      (revision 12); delete `rehearsal/utm/` (`make-seed.sh`, `create-vms.sh`,
+      `provision-desk.sh`, `render.py` and the templates); move `rehearsal/ci/` to
+      `ci/`; the mise `render`, `schema`, `lint-yaml`, `lint-doc` and `lint-mermaid` tasks
+      read `build/` only. The `lint-shell` task stays, for the bash tasks themselves.
+      Done 8 November.
 - [x] Templates, `render.py` with placeholder checking, `cloud-init schema` in CI, seed
       ISOs, VM creation via AppleScript, inter-VM host routes: all working on the Mac.
 
@@ -457,7 +522,8 @@ Parity with today's rig, then the old scripts go.
       checkout path, access, the key's fingerprint and GitHub id, created) and a
       `credentials` list for everything else; each entry has kind, scope, fingerprint or
       id, where it lives, created, the revoke action and its state, `active` or
-      `pending-revoke`.
+      `pending-revoke`. The module and the backend side of the record exist since M2
+      (8 November); M3 fills `github_key_id`, the states and `credentials`.
 - [ ] `control_creds.py`: deploy keys, one per repository (`backend repo add` over SSH
       returns the public key, `gh repo deploy-key add` with `--allow-write` when asked,
       record the key id; `repo rm` runs `gh repo deploy-key delete` before `backend repo
@@ -473,6 +539,21 @@ Parity with today's rig, then the old scripts go.
 - [ ] `repo add`, `repo rm` and `repo ls` on the control side, and `creds audit`, which
       compares the inventory with `gh repo deploy-key list` on every repository it
       knows: pending revocations retried, unclaimed keys reported, `--fix` deletes them.
+      Keys registered by hand at M2 have no GitHub id in the inventory, only the public
+      key and fingerprint `new` recorded, so the audit adopts a key GitHub holds whose
+      text matches an inventory entry (storing the id and marking it `active`) before
+      calling anything unclaimed.
+- [ ] Split the rig key in two. Today one pair, `secrets/gw_ed25519`, is both the control
+      side's login to every VM (desk as `jsw`, backends as `dev`) and gw's key to the
+      backends (`/home/gw/.ssh/vm_ed25519`). On the Mac rig desk's `jsw` account authorizes
+      that public key, so the client sandbox user holds a key that also logs in as the
+      sudo-capable host user on desk: a sandbox escape in the rehearsal model, found
+      8 November while explaining `client-host new`. Not an issue on the Linux laptop,
+      whose own account never authorizes the rig key. Fix: a control key (the Mac or the
+      laptop into desk and the backends) and a sandbox key (gw into the backends only);
+      backends authorize both in their cloud-init, desk authorizes only the control key,
+      `host install` installs only the sandbox key, and `client-host new` pushes only the
+      sandbox pair to desk's secrets directory. The inventory records both pairs.
 - [ ] Host key pinning: `new` takes the VM's SSH host public key through the driver
       (Incus can read it from the guest; UTM's serial console carries cloud-init's host
       key print) before the first SSH connection, then hands it to `connect add`; never
@@ -554,7 +635,10 @@ Written before the laptop arrives, first run on it.
       `sandboxed-devenv image build`, `sandboxed-devenv ls` shows which backends run an
       older image or package; `sandboxed-devenv upgrade PROJECT` recreates from the new
       image with the same credentials policy, or pushes the new wheel and reinstalls when
-      only the package changed.
+      only the package changed. Noted 8 November: the rebuild decision compares versions
+      and the rendered cloud-init, so a code change without a version bump leaves the
+      image and every backend on the old code until `image build --force`; a digest of
+      the wheel in the record would catch it.
 - [ ] Cloud and service CLIs per project (`aws`, Linode, Terraform) and their scoped
       credentials, the open question in the summary.
 - [ ] Section 5 hardening on the host: the 1Password agent allowlist, nothing
@@ -570,7 +654,7 @@ Written before the laptop arrives, first run on it.
 |---|---|---|
 | M0 scaffold | `mise run verify` green with the package installed and one test | CI |
 | M1 client host | `desk` rebuilt from the slim template with the package installed; `sandboxed-devenv host check` 0 FAIL; Gateway via `client start`; preview and clipboard work | Mac |
-| M2 drivers and backend split | `sandboxed-devenv new` to a connected client on the Mac, the package installed in the backend; old scripts deleted | Mac |
+| M2 drivers and backend split | `sandboxed-devenv new` to a connected client on the Mac, the package installed in the backend; old scripts deleted. Status 8 November: `new` ready in 17 s with the connection written for gw on desk, gw's SSH to the backend proven, scripts deleted; left: a desk from `client-host new` and the connection opened in Gateway's window | Mac |
 | M3 credentials | `sandboxed-devenv new` and `sandboxed-devenv rm` need no manual GitHub or Gateway step | Mac |
 | M4 testing | `mise run test-e2e` passes on the Mac unattended, versions matching on all three machines | Mac |
 | M5 Linux laptop | `sandboxed-devenv test end-to-end` passes on the laptop; first real project opened | Linux laptop |

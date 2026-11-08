@@ -81,3 +81,20 @@ def test_host_check_dry_run_runs_the_canary_as_gw(monkeypatch, tmp_path, capsys)
 def test_gateway_url_names_the_version():
     assert "JetBrainsGateway-2026.2.2" in host_install.gateway_url("2026.2.2")
     assert host_install.gateway_url("2026.2.2").endswith(".tar.gz")
+
+
+def test_a_kept_file_is_written_once_and_then_left_alone(tmp_path, monkeypatch):
+    from sandboxed_devenv import render
+
+    entry = render.ManifestEntry(dest=str(tmp_path / "kept.xml"), owner=ME, group=MY_GROUP, mode="0600", template=False,
+                                 keep=True, description="kept")
+    monkeypatch.setattr(render, "load_manifest", lambda: {"host": {"kept.xml": entry}})
+    monkeypatch.setattr(render, "render_entry", lambda role, name, entry, values: "<fresh/>")
+    ctx = host_install.Context(apply=True, values={}, command="host install", secrets_dir=tmp_path)
+    first = host_install.step_files(ctx)
+    assert [result.status for result in first] == [steps.CHANGED]
+    (tmp_path / "kept.xml").write_text("<edited/>")
+    second = host_install.step_files(ctx)
+    assert [result.status for result in second] == [steps.UNCHANGED]
+    assert "kept" in second[0].detail
+    assert (tmp_path / "kept.xml").read_text() == "<edited/>"

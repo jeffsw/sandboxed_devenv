@@ -2,7 +2,7 @@
 #MISE description="ruff + syntax check of the package, its tests, the seed renderer and the python tasks"
 set -euo pipefail
 cd "$MISE_PROJECT_ROOT"
-files=(sandboxed_devenv/*.py tests/*.py rehearsal/utm/render.py)
+files=(sandboxed_devenv/*.py tests/*.py)
 for t in .mise/tasks/*; do
     if head -1 "$t" | grep -q python; then files+=("$t"); fi
 done

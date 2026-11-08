@@ -139,6 +139,8 @@ def step_linger(ctx: Context) -> list[Outcome]:
 
 def step_files(ctx: Context) -> list[Outcome]:
     retlist = []
+    # The sandbox user exists by now (step_user ran), so the ruleset gets its real uid.
+    ctx.values["SANDBOX_UID"] = str(render.sandbox_uid())
     for name, entry in render.load_manifest()["host"].items():
         if entry.is_cloudinit:
             continue
@@ -147,6 +149,10 @@ def step_files(ctx: Context) -> list[Outcome]:
             dest = render.rendered_dest(entry, ctx.values)
         except render.RenderError as error:
             retlist.append(Outcome(f"file {entry.dest}", FAILED, str(error)))
+            continue
+        if entry.keep and dest.exists():
+            # Written once; `connect add` manages its content from then on.
+            retlist.append(Outcome(f"file {dest}", UNCHANGED, "kept: another command manages its content"))
             continue
         result = sync_file(dest, content.encode(), entry.owner, entry.group, entry.mode_bits, ctx.apply)
         if result.status == CHANGED:

@@ -9,8 +9,7 @@ Each probe prints PASS, FAIL or INFO with a one-line detail; `--json` prints one
 per probe and a summary object last, for the test harness. Exit status is 1 if any probe
 failed. Standard library only, no imports from the rest of the package and no root needed,
 so `python3 -m sandboxed_devenv.canary` runs on a VM whose install is half done and the file
-itself runs as a script (the rehearsal's backend template still copies it to
-/usr/local/bin/canary until M2).
+itself runs as a script.
 
 What PASS means per probe is given in the doc; in short: the real user's secrets are
 unreadable, no agent offers keys, egress matches the allow and deny lists, X11 and

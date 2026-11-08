@@ -125,3 +125,16 @@ def test_ide_registration_is_a_link_to_the_ide_directory(tmp_path):
     assert backend_prepare.ide_registered(registration, ide_dir) is False
     (registration / "idea").symlink_to(ide_dir)
     assert backend_prepare.ide_registered(registration, ide_dir) is True
+
+
+def test_project_dir_is_made_at_first_boot(paths):
+    from sandboxed_devenv import config, steps
+
+    project = config.ProjectConfig(project="p", git=config.GitIdentity(user_name="D", user_email="d@example.invalid"))
+    ctx = backend_prepare.Context(apply=True, values={}, command="backend prepare", stage="project", project=project, paths=paths)
+    first = backend_prepare.step_project_dir(ctx)
+    assert [result.status for result in first] == [steps.CHANGED]
+    assert (paths.proj_dir / "p").is_dir()
+    assert oct((paths.proj_dir / "p").stat().st_mode & 0o777) == "0o755"
+    assert [result.status for result in backend_prepare.step_project_dir(ctx)] == [steps.UNCHANGED]
+    assert backend_prepare.step_project_dir in backend_prepare.PROJECT_STEPS

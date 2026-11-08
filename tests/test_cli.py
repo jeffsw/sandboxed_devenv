@@ -23,6 +23,9 @@ PLANNED_COMMANDS = [
     ("rm",),
     ("clone",),
     ("resources",),
+    ("client-host", "new"),
+    ("client-host", "rm"),
+    ("client-host", "ssh"),
     ("repo", "add"),
     ("repo", "rm"),
     ("repo", "ls"),
@@ -115,9 +118,9 @@ def test_group_without_subcommand_is_a_usage_error():
 
 
 def test_stub_exits_1_and_names_its_milestone(capsys):
-    status = cli.main(["connect", "ls"])
+    status = cli.main(["creds", "ls"])
     assert status == 1
-    assert "M2" in capsys.readouterr().err
+    assert "M3" in capsys.readouterr().err
 
 
 def test_doctor_runs(capsys):

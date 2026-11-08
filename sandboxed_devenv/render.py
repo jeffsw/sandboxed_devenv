@@ -5,15 +5,16 @@ rule and the ``@@NAME@@`` fill, which `host install` and, from M2, the drivers u
 file where it goes. Rendering has no side effects beyond the output directory.
 
 The values the templates take come from ``versions.yaml`` (every pinned version), the user
-config (addresses, the VM name prefix) and, per project, ``project_values()``. Until
-``policy.yaml`` arrives, the backend address, the uplink interface and the desk password keep
-the rig's environment overrides (``BACKEND_ADDRESS``, ``UPLINK_INTERFACE``, ``DESK_PASSWORD``).
+config (addresses, the VM name prefix), ``policy.yaml`` (the VM subnet, the uplink, the egress
+allowlists that become nftables set elements) and, per project, ``project_values()``. The desk
+VM's login password keeps the rig's environment override (``DESK_PASSWORD``).
 """
 
 import base64
 import json
 import os
 import pathlib
+import pwd
 import re
 import shlex
 import shutil
@@ -23,7 +24,7 @@ import sys
 import pydantic
 import yaml
 
-from sandboxed_devenv import config
+from sandboxed_devenv import config, remote
 
 CHECKOUT_MARKER = 'name = "sandboxed-devenv"'
 ROLES = ("host", "backend")
@@ -32,9 +33,16 @@ TEMPLATE_SUFFIX = ".tmpl"
 CLOUDINIT_FORMAT_SUFFIX = ".yaml"
 PLACEHOLDER = re.compile(r"@@([A-Z][A-Z0-9_]*)@@")
 
-# UTM's Apple-backend NIC on desk; the Linux laptop names its own.
-DEFAULT_UPLINK_INTERFACE = "en*"
 DEFAULT_DESK_PASSWORD = "rehearsal"
+DEFAULT_CLIENT_HOST_USER = "jsw"
+# The client sandbox's user on the client host, whose egress the ruleset's output chain limits.
+# nft resolves a user name when the rules are parsed, so the ruleset carries the uid: the real
+# one where the user exists (`host install` creates it first), else this placeholder (CI).
+SANDBOX_USER = "gw"
+SANDBOX_UID_PLACEHOLDER = 1001
+# What `render` puts in a document when the secrets directory holds no rig key yet: CI renders
+# with placeholders, and secrets never enter its artifacts (PLAN.md, "Principles").
+RIG_PUBKEY_PLACEHOLDER = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA placeholder"
 SAMPLE_PROJECT = "sample"
 
 
@@ -53,6 +61,8 @@ class ManifestEntry(pydantic.BaseModel):
     mode: str | None = None
     template: bool
     stage: str | None = None
+    # Written when absent and left alone afterwards: another command owns its content.
+    keep: bool = False
     description: str
 
     @property
@@ -126,13 +136,48 @@ def fill(text: str, values: dict[str, str], where: str) -> str:
     return retval
 
 
-def default_values(user_config: config.UserConfig | None = None, **overrides: str) -> dict[str, str]:
+def nft_elements(items: list) -> str:
+    """A set's elements for nftables, or a comment when the list is empty (nft rejects `{ }`)."""
+    if items:
+        retval = "elements = { " + ", ".join(str(item) for item in items) + " }"
+    else:
+        retval = "# no elements"
+    return retval
+
+
+def nft_ports(ports: list[int]) -> str:
+    retval = "{ " + ", ".join(str(port) for port in ports) + " }"
+    return retval
+
+
+def sandbox_uid() -> int:
+    """The sandbox user's uid on this machine, or the placeholder where the user does not exist."""
+    try:
+        retval = pwd.getpwnam(SANDBOX_USER).pw_uid
+    except KeyError:
+        retval = SANDBOX_UID_PLACEHOLDER
+    return retval
+
+
+def client_host_user(user_config: config.UserConfig) -> str:
+    """The login on the client host VM: the user in ``client_host``, or the rig's default."""
+    parsed = remote.parse_client_host(user_config.client_host) if user_config.client_host != "local" else None
+    retval = parsed[0] if parsed else DEFAULT_CLIENT_HOST_USER
+    return retval
+
+
+def default_values(user_config: config.UserConfig | None = None, policy: config.Policy | None = None,
+                   **overrides: str) -> dict[str, str]:
     """Every value the templates may use that is not specific to one project: the pinned versions,
-    the addresses from the user config, and secrets (``RIG_PUBKEY``) only as overrides."""
+    the addresses from the user config, the policy's subnet and allowlists, and secrets
+    (``RIG_PUBKEY``) only as overrides."""
     versions = config.load_versions()
     if user_config is None:
         user_config = config.load_user_config()
+    if policy is None:
+        policy = config.load_policy()
     utm = user_config.utm
+    lower_half, upper_half = policy.subnet_halves()
     retdict = {
         "GATEWAY_VERSION": versions.gateway.version,
         # Gateway keeps its settings under ~/.config/JetBrains/JetBrainsGateway<major.minor>/
@@ -141,10 +186,22 @@ def default_values(user_config: config.UserConfig | None = None, **overrides: st
         "IDE_BACKEND_URL_AARCH64": versions.ide_backend.url("aarch64"),
         "IDE_BACKEND_URL_X86_64": versions.ide_backend.url("x86_64"),
         "IDE_PLUGINS": " ".join(versions.ide_backend.plugins),
-        # The client host's view of the backends; M2's policy.yaml widens this to the subnet.
-        "BACKEND_ADDRESS": os.environ.get("BACKEND_ADDRESS", utm.address_pool_start),
-        "UPLINK_INTERFACE": os.environ.get("UPLINK_INTERFACE", DEFAULT_UPLINK_INTERFACE),
+        # The nftables ruleset, from policy.yaml.
+        "VM_SUBNET": policy.vm_subnet,
+        "UPLINK_INTERFACE": policy.uplink_interface,
+        "SANDBOX_USER": SANDBOX_USER,
+        "SANDBOX_UID": str(sandbox_uid()),
+        "CLIENT_ALLOWED": nft_elements(policy.client.cidrs),
+        "CLIENT_PORTS": nft_ports(policy.client.ports),
+        "CLIENT_HOSTS": ", ".join(policy.client.hosts) or "none",
+        "BACKEND_ALLOWED": nft_elements(policy.backend.cidrs),
+        "BACKEND_PORTS": nft_ports(policy.backend.ports),
+        "BACKEND_HOSTS": ", ".join(policy.backend.hosts) or "none",
+        # The desk VM on the Mac rig: its login, and the two half-subnet routes through the Mac.
+        "CLIENT_HOST_USER": client_host_user(user_config),
         "DESK_PASSWORD": os.environ.get("DESK_PASSWORD", DEFAULT_DESK_PASSWORD),
+        "SUBNET_LOWER_HALF": lower_half,
+        "SUBNET_UPPER_HALF": upper_half,
         # A backend's network-config on UTM; `new` adds ADDRESS from the pool.
         "INTERFACE": utm.interface,
         "PREFIX_LENGTH": utm.subnet.split("/")[1],
@@ -326,16 +383,15 @@ def cmd_render(args) -> int:
     pubkey = rig_public_key()
     command = wheel_build_command(out_dir)
     if args.dry_run:
-        key_state = "present" if pubkey else "absent, so the real run would stop"
+        key_state = "present" if pubkey else "absent, so a placeholder key is rendered"
         print(f"would render files/host and files/backend under {out_dir} (rig key {key_file}: {key_state})")
         print(f"would run in {checkout}: {shlex.join(command)}")
         retval = 0
         return retval
     if pubkey is None:
-        print(f"sandboxed-devenv render: no rig key at {key_file}; rehearsal/utm/make-seed.sh creates one",
-              file=sys.stderr)
-        retval = 1
-        return retval
+        print(f"render: no rig key at {key_file}; rendering a placeholder key (`image build` or `client-host new` "
+              "mints the real one)")
+        pubkey = RIG_PUBKEY_PLACEHOLDER
     values = sample_values(RIG_PUBKEY=pubkey)
     for role in ROLES:
         try:

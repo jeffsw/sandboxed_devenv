@@ -2,9 +2,8 @@
 __pycache__/
 .ruff_cache/
 node_modules/
-rehearsal/utm/build/
-rehearsal/utm/keys/
-rehearsal/utm/*.img
+# Leftovers of the rig scripts deleted at M2 (build/, keys/, a cloud image) on older checkouts.
+rehearsal/
 .venv/
 build/
 dist/

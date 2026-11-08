@@ -1,30 +1,50 @@
 #!/usr/sbin/nft -f
 # sandboxed-devenv host: rendered to /etc/nftables.conf
-# Egress allowlist for the backend VMs (summary, 4.9 step 7). `host install` writes it and
-# leaves the service disabled; policy decides when `systemctl enable --now nftables` runs.
-# The same table serves the Linux laptop; only the uplink interface name changes.
+# The egress policy from policy.yaml in two halves. The backend half forwards and masquerades
+# the VMs' traffic to the allowlist only (summary, 4.9 step 7); the client half limits what the
+# client sandbox user may reach: the VM subnet, the resolver, and the client allowlist. `host
+# install` writes the file and enables the service only when the policy says `enforce`. Only
+# CIDRs are here: nft refuses a host name that resolves to several addresses (8 November 2026),
+# so the hosts each side needs are listed as comments until M5 settles how names are followed.
+#   client hosts:  @@CLIENT_HOSTS@@
+#   backend hosts: @@BACKEND_HOSTS@@
 flush ruleset
 
-define backends = { @@BACKEND_ADDRESS@@ }
+define vm_subnet = @@VM_SUBNET@@
 define uplink = "@@UPLINK_INTERFACE@@"
-# The four github.com "git" ranges from https://api.github.com/meta (read 8 October 2026);
-# the API also lists per-region /32 hosts, add them if GitHub stops answering.
-define github_v4 = { 140.82.112.0/20, 143.55.64.0/20, 185.199.108.0/22, 192.30.252.0/22 }
+# The uid of @@SANDBOX_USER@@, the client sandbox user; a name would be resolved when the
+# rules are parsed, which fails wherever the user does not exist (CI).
+define sandbox_uid = @@SANDBOX_UID@@
 
 table inet vmrouter {
-  set allowed {
+  set backend_allowed {
     type ipv4_addr
     flags interval
-    elements = $github_v4
+    @@BACKEND_ALLOWED@@
+  }
+  set client_allowed {
+    type ipv4_addr
+    flags interval
+    @@CLIENT_ALLOWED@@
   }
   chain forward {
     type filter hook forward priority filter; policy drop;
     ct state established,related accept
-    ip saddr $backends ip daddr @allowed tcp dport { 22, 443 } accept
-    ip saddr $backends log prefix "vmrouter drop: " drop
+    ip saddr $vm_subnet ip daddr @backend_allowed tcp dport @@BACKEND_PORTS@@ accept
+    ip saddr $vm_subnet log prefix "vmrouter drop: " drop
+  }
+  chain output {
+    type filter hook output priority filter; policy accept;
+    meta skuid != $sandbox_uid accept
+    ct state established,related accept
+    ip daddr $vm_subnet accept
+    udp dport 53 accept
+    tcp dport 53 accept
+    ip daddr @client_allowed tcp dport @@CLIENT_PORTS@@ accept
+    log prefix "client drop: " drop
   }
   chain postrouting {
     type nat hook postrouting priority srcnat; policy accept;
-    ip saddr $backends oifname $uplink masquerade
+    ip saddr $vm_subnet oifname $uplink masquerade
   }
 }

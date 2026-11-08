@@ -33,7 +33,7 @@ def main() -> int:
             width = None
 
     blocks = re.findall(r'```mermaid\n(.*?)```', text, re.S)
-    out = pathlib.Path('rehearsal/utm/build/mermaid')
+    out = pathlib.Path('build/mermaid')
     out.mkdir(parents=True, exist_ok=True)
     for old in out.glob('*'):
         old.unlink()
