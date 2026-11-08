@@ -711,8 +711,8 @@ Written before the laptop arrives, first run on it.
       on the laptop.
 - [x] `docs/linux-laptop-install.md`: Ubuntu 26.04 (per Framework's guide on the 13 Pro),
       full-disk encryption, no separate volume (the Incus pool is a directory on the
-      root filesystem; only free space matters), the operations user or VM for router
-      access (summary section 5), then the package:
+      root filesystem; only free space matters), another user or VM for credentials that
+      have nothing to do with development (summary section 5), then the package:
       `sudo pipx install --global ~/proj/ide_sandbox/sandboxed_devenv`,
       `client_host: local` in the config, the user's `policy.yaml` with the laptop's
       uplink and bridge subnet, `sudo sandboxed-devenv host install`,

@@ -9,7 +9,7 @@ Four stages, each a section below:
 
 ```mermaid
 flowchart LR
-  os["1. The operating system<br/>Ubuntu 26.04, full-disk encryption,<br/>GNOME on Wayland, a separate principal for routers"]
+  os["1. The operating system<br/>Ubuntu 26.04, full-disk encryption,<br/>GNOME on Wayland, your login as the development user"]
   pkgs["2. Packages<br/>incus, pipx, gh, git, xorriso;<br/>incus-admin, incus admin init, the sudoers rule"]
   tool["3. sandboxed-devenv<br/>the package and its configuration;<br/>sudo sandboxed-devenv host install;<br/>sandboxed-devenv image build"]
   first["4. The first project<br/>sandboxed-devenv new, Gateway from client start,<br/>test host, test backend, test-e2e"]
@@ -22,8 +22,8 @@ flowchart LR
    AppArmor profiles, pipx 1.8.0 and the kernel match). Full-disk encryption. No separate
    volume: the Incus pool is a directory on the root filesystem, so only free space matters,
    and the filesystem type does not (PLAN.md, "Incus storage").
-2. Your login is the development user. Anything that touches routers lives in a separate
-   principal, an operations user or a VM (summary, section 5), never in this one.
+2. Your login is the development user. Credentials that have nothing to do with development
+   stay out of it, in another user or a VM (summary, section 5).
 3. The desktop session is GNOME on Wayland (the default). The client sandbox needs the Wayland
    socket and nothing else.
 
