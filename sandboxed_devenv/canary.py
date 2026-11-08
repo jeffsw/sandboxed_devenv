@@ -6,8 +6,11 @@ Run it as the principal under test, in the environment it really gets:
                    (on the client host, after `client start` in a GNOME session)
   backend VM:      sandboxed-devenv canary --role backend      (as dev)
 Each probe prints PASS, FAIL or INFO with a one-line detail; `--json` prints one JSON object
-per probe and a summary object last, for the test harness. Exit status is 1 if any probe
-failed. Standard library only, no imports from the rest of the package and no root needed,
+per probe and a summary object last, for the test harness. `--expect [FILE]` compares the
+statuses with a golden result for the role (the package's canary_expected.json unless a file
+is given: probe names, or prefixes ending in `*`, each with the statuses allowed) and reports
+every mismatch; the harness does the same comparison on the control side. Exit status is 1 if
+any probe failed or any expectation was missed. Standard library only, no imports from the rest of the package and no root needed,
 so `python3 -m sandboxed_devenv.canary` runs on a VM whose install is half done and the file
 itself runs as a script.
 
@@ -34,6 +37,10 @@ RESULTS = []
 OUTPUT_JSON = False
 COMMAND_NAME = "sandboxed-devenv"
 GLOBAL_COMMAND_PATH = "/usr/local/bin/sandboxed-devenv"
+# The golden results per role, beside this file in the package; `--expect` with no FILE reads it.
+EXPECTED_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "canary_expected.json")
+PACKAGED = "<packaged>"
+STATUSES = ("PASS", "FAIL", "INFO")
 
 
 def set_output_json(enabled):
@@ -56,6 +63,73 @@ def summary():
     for status, _name, _detail in RESULTS:
         counts[status.lower()] += 1
     return counts
+
+
+def expected_for(role, path=None):
+    """The golden result for a role: a JSON document holding either `{role: {...}}` for both
+    roles or one role's expectations, each a probe name (or a prefix ending in `*`) with the
+    list of statuses allowed."""
+    with open(path or EXPECTED_FILE) as f:
+        document = json.load(f)
+    if role in document and isinstance(document[role], dict):
+        document = document[role]
+    expected = {}
+    for name, allowed in document.items():
+        if isinstance(allowed, str):
+            allowed = [allowed]
+        expected[name] = list(allowed)
+    return expected
+
+
+def compare(results, expected):
+    """Mismatches between probe results `(status, name, detail)` and a golden result: an expected
+    probe that did not run, a status outside the allowed ones, and every FAIL not covered by an
+    expectation. Empty when the role is as it should be."""
+    mismatches = []
+    covered = set()
+    for pattern, allowed in expected.items():
+        if pattern.endswith("*"):
+            matching = [r for r in results if r[1].startswith(pattern[:-1])]
+        else:
+            matching = [r for r in results if r[1] == pattern]
+        if not matching:
+            mismatches.append(f"{pattern}: no such probe ran; expected {' or '.join(allowed)}")
+        for status, name, detail in matching:
+            covered.add(name)
+            if status not in allowed:
+                mismatches.append(f"{name}: {status}, expected {' or '.join(allowed)} ({detail})")
+    for status, name, detail in results:
+        if status == "FAIL" and name not in covered:
+            mismatches.append(f"{name}: FAIL ({detail})")
+    return mismatches
+
+
+def parse_json_lines(text):
+    """The `--json` output back into a report: the header, the probes as tuples, the summary and
+    the expectation mismatches; lines that are not JSON (a warning, say) are kept aside."""
+    report = {"canary": None, "probes": [], "summary": None, "mismatches": [], "other": []}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except ValueError:
+            report["other"].append(line)
+            continue
+        if not isinstance(item, dict):
+            report["other"].append(line)
+        elif "status" in item and "name" in item:
+            report["probes"].append((item["status"], item["name"], item.get("detail", "")))
+        elif "summary" in item:
+            report["summary"] = item["summary"]
+        elif "canary" in item:
+            report["canary"] = item["canary"]
+        elif "expect" in item:
+            report["mismatches"] = list(item["expect"].get("mismatches", []))
+        else:
+            report["other"].append(line)
+    return report
 
 
 def run(cmd, env=None, timeout=15):
@@ -619,6 +693,9 @@ def add_arguments(parser):
     parser.add_argument("--allow", action="append", default=[], metavar="HOST", help="host expected reachable on 443 (default github.com)")
     parser.add_argument("--deny", action="append", default=[], metavar="HOST", help="host expected unreachable on 443 (give one once egress control is on)")
     parser.add_argument("--deny-ip", default="1.1.1.1", help="address expected unreachable on 443 when --deny is used (default 1.1.1.1)")
+    parser.add_argument("--expect", nargs="?", const=PACKAGED, metavar="FILE",
+                        help="compare the statuses with a golden result for the role: the package's canary_expected.json, "
+                             "or FILE (probe names or prefixes ending in * with the statuses allowed); mismatches fail the run")
     return parser
 
 
@@ -668,17 +745,30 @@ def run_probes(args):
     probe_dri()
     probe_clipboard()
     probe_writes()
-    if args.role == "client":
-        # The backend gets this probe at M2, when the base image installs the package.
-        probe_command()
+    # Both roles run from the package: the client sandbox through `client session`, the backend
+    # through `backend prepare` and the control side's remote calls.
+    probe_command()
     probe_identity()
 
     counts = summary()
+    mismatches = []
+    if args.expect:
+        path = None if args.expect == PACKAGED else args.expect
+        try:
+            mismatches = compare(list(RESULTS), expected_for(args.role, path))
+        except (OSError, ValueError) as e:
+            mismatches = [f"cannot read the expectations from {path or EXPECTED_FILE}: {e}"]
+        if OUTPUT_JSON:
+            print(json.dumps({"expect": {"source": path or EXPECTED_FILE, "mismatches": mismatches}}), flush=True)
+        else:
+            for line in mismatches:
+                print(f"EXPECT {line}", flush=True)
     if OUTPUT_JSON:
         print(json.dumps({"summary": counts}), flush=True)
     else:
-        print(f"summary: {counts['pass']} pass, {counts['fail']} fail, {counts['info']} info")
-    return 1 if counts["fail"] else 0
+        print(f"summary: {counts['pass']} pass, {counts['fail']} fail, {counts['info']} info"
+              + (f", {len(mismatches)} expectation(s) missed" if args.expect else ""))
+    return 1 if counts["fail"] or mismatches else 0
 
 
 def main(argv=None):
