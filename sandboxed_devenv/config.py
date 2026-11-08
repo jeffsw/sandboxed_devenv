@@ -33,9 +33,14 @@ BACKEND_CONFIG_DIR = pathlib.Path("/etc/sandboxed-devenv")
 BACKEND_PROJECT_CONFIG = BACKEND_CONFIG_DIR / "project.yaml"
 BACKEND_IMAGE_MARKER = BACKEND_CONFIG_DIR / "image.yaml"
 BACKEND_PREPARED_MARKER = BACKEND_CONFIG_DIR / "prepared.yaml"
-# The rig key pair in secrets/: the control machine's way into desk and every backend, and the
-# client sandbox's key to the backends (``/home/gw/.ssh/vm_ed25519`` on the client host).
-RIG_KEY_NAME = "gw_ed25519"
+# Two key pairs in secrets/ (PLAN.md M3, the key split). The control key is the control
+# machine's way into desk and every backend; the sandbox key is the client sandbox's way into
+# the backends only (``/home/gw/.ssh/vm_ed25519`` on the client host), so a compromised sandbox
+# holds nothing that opens the client host. Before the split one pair, ``gw_ed25519``, served
+# both; it becomes the control key when found.
+CONTROL_KEY_NAME = "control_ed25519"
+SANDBOX_KEY_NAME = "sandbox_ed25519"
+LEGACY_RIG_KEY_NAME = "gw_ed25519"
 CLAUDE_TOKEN_NAME = "claude_oauth_token"
 DEFAULT_VM_NAME_PREFIX = "idesbx-"
 ARCHITECTURES = ("aarch64", "x86_64")

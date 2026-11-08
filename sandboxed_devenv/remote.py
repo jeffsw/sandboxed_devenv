@@ -3,8 +3,9 @@
 The control side never copies configuration into a VM by hand: it runs the same command there
 (PLAN.md, "Roles"). A ``Remote`` reaches one machine as one user with the rig key and nothing
 else: no agent, no user ssh_config (``-F none``), host keys in a file of the caller's choosing,
-where the first key seen is accepted and any later change refused. Pinning the key before the
-first connection is M3's job (`connect add`); until then the file is per VM and starts empty.
+checked strictly: the control side mints each VM's host key into its cloud-init seed and pins
+the public half in that file before the VM boots (``pin_host_key``), so no connection ever
+trusts a key on first use.
 
 ``push`` copies a file the same way, and ``install_wheel`` pushes a wheel and runs
 ``sudo pipx install --global`` on it (PLAN.md, "Installation"). ``wait_for_ssh`` and
@@ -25,6 +26,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 
@@ -43,7 +45,7 @@ SSH_OPTIONS = [
     "-o", "ForwardAgent=no",
     "-o", "BatchMode=yes",
     "-o", f"ConnectTimeout={SSH_CONNECT_TIMEOUT}",
-    "-o", "StrictHostKeyChecking=accept-new",
+    "-o", "StrictHostKeyChecking=yes",
     "-o", "LogLevel=ERROR",
 ]
 
@@ -266,17 +268,45 @@ class Local:
                 shutil.copy2(source, dest)
 
 
-def rig_key_path() -> pathlib.Path:
-    """The rig key's private half in the secrets directory; the control machine's way into every VM."""
-    retval = config.secrets_dir() / config.RIG_KEY_NAME
+def control_key_path() -> pathlib.Path:
+    """The control key's private half in the secrets directory; the control machine's way into every VM."""
+    retval = config.secrets_dir() / config.CONTROL_KEY_NAME
     return retval
 
 
-def require_rig_key() -> pathlib.Path:
-    """The rig key, or RemoteError naming the file and what creates it."""
-    retval = rig_key_path()
+def sandbox_key_path() -> pathlib.Path:
+    """The sandbox key's private half: the client sandbox's way into the backends, and nothing else."""
+    retval = config.secrets_dir() / config.SANDBOX_KEY_NAME
+    return retval
+
+
+def require_control_key() -> pathlib.Path:
+    """The control key, or RemoteError naming the file and what creates it."""
+    retval = control_key_path()
     if not retval.is_file():
-        raise RemoteError(f"no rig key at {retval}; `sandboxed-devenv image build` creates the pair on first use")
+        raise RemoteError(f"no control key at {retval}; `image build`, `client-host new` or `new` mints the key pairs")
+    return retval
+
+
+def generate_host_key(comment: str) -> tuple[str, str]:
+    """A fresh ed25519 SSH host key pair for a VM's seed: (private, public). Made in a temporary
+    directory that is removed at once; the private half lives on only inside the seed."""
+    with tempfile.TemporaryDirectory(prefix="sandboxed-devenv-hostkey-") as directory:
+        path = pathlib.Path(directory) / "ssh_host_ed25519_key"
+        completed = subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", comment, "-f", str(path)],
+                                   capture_output=True, text=True)
+        if completed.returncode != 0:
+            raise RemoteError(f"ssh-keygen for a host key failed: {completed.stderr.strip()}")
+        retval = (path.read_text(), path.with_suffix(".pub").read_text().strip())
+    return retval
+
+
+def pin_host_key(name: str, address: str, public_key: str) -> pathlib.Path:
+    """The known_hosts file of a VM, holding exactly its minted host key at its address."""
+    retval = known_hosts_file(name)
+    retval.parent.mkdir(parents=True, exist_ok=True)
+    parts = public_key.split()
+    retval.write_text(f"{address} {' '.join(parts[:2])}\n")
     return retval
 
 
@@ -318,7 +348,7 @@ def client_host(user_config: config.UserConfig, runner: common.Runner | None = N
     else:
         user, host, port = parsed
         known_hosts_dir().mkdir(parents=True, exist_ok=True)
-        retval = Remote(user=user, host=host, key=require_rig_key(), known_hosts=known_hosts_file("client-host"),
+        retval = Remote(user=user, host=host, key=require_control_key(), known_hosts=known_hosts_file("client-host"),
                         port=port, runner=runner)
     return retval
 
@@ -326,7 +356,7 @@ def client_host(user_config: config.UserConfig, runner: common.Runner | None = N
 def backend(address: str, vm_name: str, runner: common.Runner | None = None) -> Remote:
     """A backend as `dev` at its address, with the rig key and the VM's own known_hosts file."""
     known_hosts_dir().mkdir(parents=True, exist_ok=True)
-    retval = Remote(user=BACKEND_USER, host=address, key=require_rig_key(), known_hosts=known_hosts_file(vm_name),
+    retval = Remote(user=BACKEND_USER, host=address, key=require_control_key(), known_hosts=known_hosts_file(vm_name),
                     runner=runner or common.Runner())
     return retval
 

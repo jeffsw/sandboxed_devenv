@@ -77,6 +77,8 @@ class ProjectRecord(pydantic.BaseModel):
     image: str
     package_version: str
     address: str | None = None
+    # The SSH host public key the control side minted into the seed, pinned before any connection.
+    ssh_host_key: str | None = None
     cpus: int
     memory_gib: int
     disk_gib: int

@@ -92,7 +92,12 @@ def cmd_doctor(args) -> int:
     inventory = config.inventory_dir()
     projects = len(list(inventory.glob("*.json"))) if inventory.is_dir() else 0
     lines.append(f"inventory: {inventory} ({'present' if inventory.is_dir() else 'absent'}, {projects} projects)")
-    lines.append(_dir_line("secrets", config.secrets_dir()))
+    keys = []
+    for name in (config.CONTROL_KEY_NAME, config.SANDBOX_KEY_NAME):
+        keys.append(f"{name} {'present' if (config.secrets_dir() / name).is_file() else 'absent'}")
+    if (config.secrets_dir() / config.LEGACY_RIG_KEY_NAME).is_file():
+        keys.append(f"{config.LEGACY_RIG_KEY_NAME} present (becomes the control key on the next VM command)")
+    lines.append(f"{_dir_line('secrets', config.secrets_dir())}: {'; '.join(keys)}")
     policy_source = "the user's" if config.policy_file() == config.user_policy_file() else "the package's"
     lines.append(f"policy: {config.policy_file()} ({policy_source})")
     for line in lines:
