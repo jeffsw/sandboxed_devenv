@@ -1,8 +1,9 @@
 #cloud-config
 # sandboxed-devenv backend: cloud-init user-data for a project's backend
-# The first boot of a VM cloned from the base image: its name, the rig key again, and
-# /etc/sandboxed-devenv/project.yaml with the project's repositories, git identity and
-# Claude token, then `sandboxed-devenv backend prepare` from the package the image carries.
+# The first boot of a VM cloned from the base image: its name, its host key, the control and
+# sandbox keys for dev, and /etc/sandboxed-devenv/project.yaml with the project's repositories,
+# git identity and Claude token, then `sandboxed-devenv backend prepare` from the package the
+# image carries.
 # `backend status --json` reports `ready` once prepare is done; the control side polls it.
 
 hostname: @@HOSTNAME@@
@@ -16,7 +17,20 @@ users:
     sudo: ALL=(ALL) NOPASSWD:ALL
     lock_passwd: true
     ssh_authorized_keys:
-      - @@RIG_PUBKEY@@
+      # The control side's key and the client sandbox's key; the base image carries the control
+      # key already, so a backend made from an older image gets both here.
+      - @@CONTROL_PUBKEY@@
+      - @@SANDBOX_PUBKEY@@
+
+# The VM's SSH host key, minted by the control side into this seed so its public half is pinned
+# on the control side and the client host before the VM boots: no trust on first use. Only the
+# ed25519 key exists (ssh_genkeytypes), so nothing unpinned answers.
+ssh_deletekeys: true
+ssh_genkeytypes: [ed25519]
+ssh_keys:
+  ed25519_private: |
+@@HOST_KEY_PRIVATE@@
+  ed25519_public: @@HOST_KEY_PUBLIC@@
 
 write_files:
   # Root only: it carries the Claude token until prepare moves that into dev's settings.

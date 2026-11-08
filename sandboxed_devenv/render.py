@@ -40,10 +40,16 @@ DEFAULT_CLIENT_HOST_USER = "jsw"
 # one where the user exists (`host install` creates it first), else this placeholder (CI).
 SANDBOX_USER = "gw"
 SANDBOX_UID_PLACEHOLDER = 1001
-# What `render` puts in a document when the secrets directory holds no rig key yet: CI renders
+# What `render` puts in a document when the secrets directory holds no key pair yet: CI renders
 # with placeholders, and secrets never enter its artifacts (PLAN.md, "Principles").
-RIG_PUBKEY_PLACEHOLDER = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA placeholder"
+PUBKEY_PLACEHOLDER = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA placeholder"
+# Every seed carries the VM's SSH host key pair (cloud-init's `ssh_keys`), minted by the control
+# side so the public half is pinned before the VM boots. The image record's digest of the
+# image cloud-init is taken with these fixed values instead, or every build would look new.
+HOST_KEY_DIGEST_VALUES = {"HOST_KEY_PRIVATE": "    (a fresh key per boot)", "HOST_KEY_PUBLIC": "ssh-ed25519 (a fresh key per boot)"}
+HOST_KEY_INDENT = "    "
 SAMPLE_PROJECT = "sample"
+_sample_host_key = None
 
 
 class RenderError(Exception):
@@ -170,7 +176,7 @@ def default_values(user_config: config.UserConfig | None = None, policy: config.
                    **overrides: str) -> dict[str, str]:
     """Every value the templates may use that is not specific to one project: the pinned versions,
     the addresses from the user config, the policy's subnet and allowlists, and secrets
-    (``RIG_PUBKEY``) only as overrides."""
+    (``CONTROL_PUBKEY``, ``SANDBOX_PUBKEY``, the host key pair) only as overrides."""
     versions = config.load_versions()
     if user_config is None:
         user_config = config.load_user_config()
@@ -230,6 +236,26 @@ def project_values(project: config.ProjectConfig, hostname: str, address: str | 
     return retdict
 
 
+def host_key_values(private: str, public: str) -> dict[str, str]:
+    """The seed's host key pair as the templates take it: the private half indented into the
+    `ed25519_private: |` block scalar, the public half on one line."""
+    lines = []
+    for line in private.rstrip("\n").splitlines():
+        lines.append(f"{HOST_KEY_INDENT}{line}")
+    retdict = {"HOST_KEY_PRIVATE": "\n".join(lines), "HOST_KEY_PUBLIC": public.strip()}
+    return retdict
+
+
+def sample_host_key() -> dict[str, str]:
+    """A throwaway host key pair for `render` and the tests, generated once per process."""
+    global _sample_host_key
+    if _sample_host_key is None:
+        private, public = remote.generate_host_key("sample")
+        _sample_host_key = host_key_values(private, public)
+    retdict = dict(_sample_host_key)
+    return retdict
+
+
 def sample_project() -> config.ProjectConfig:
     """A project with no secrets, so `render` and CI can render the project stage."""
     retval = config.ProjectConfig(
@@ -241,16 +267,21 @@ def sample_project() -> config.ProjectConfig:
 
 
 def sample_values(**overrides: str) -> dict[str, str]:
-    """Defaults plus the sample project, for `render` and the tests."""
+    """Defaults plus the sample project, placeholder public keys and a throwaway host key, for
+    `render` and the tests; the overrides win."""
     user_config = config.load_user_config()
-    retdict = default_values(user_config, **overrides)
+    retdict = default_values(user_config)
     retdict.update(project_values(sample_project(), user_config.vm_name(SAMPLE_PROJECT), user_config.utm.address_pool_start))
+    retdict["CONTROL_PUBKEY"] = PUBKEY_PLACEHOLDER
+    retdict["SANDBOX_PUBKEY"] = PUBKEY_PLACEHOLDER
+    retdict.update(sample_host_key())
+    retdict.update(overrides)
     return retdict
 
 
-def rig_public_key() -> str | None:
-    """The rig key's public half from the secrets directory, or None when there is none yet."""
-    path = config.secrets_dir() / f"{config.RIG_KEY_NAME}.pub"
+def secret_public_key(name: str) -> str | None:
+    """A key pair's public half from the secrets directory, or None when there is none yet."""
+    path = config.secrets_dir() / f"{name}.pub"
     retval = None
     if path.is_file():
         retval = path.read_text().strip()
@@ -379,20 +410,25 @@ def cmd_render(args) -> int:
     out_dir = pathlib.Path(args.out)
     if not out_dir.is_absolute():
         out_dir = checkout / out_dir
-    key_file = config.secrets_dir() / f"{config.RIG_KEY_NAME}.pub"
-    pubkey = rig_public_key()
+    overrides = {}
+    missing = []
+    for placeholder, name in (("CONTROL_PUBKEY", config.CONTROL_KEY_NAME), ("SANDBOX_PUBKEY", config.SANDBOX_KEY_NAME)):
+        pubkey = secret_public_key(name)
+        if pubkey:
+            overrides[placeholder] = pubkey
+        else:
+            missing.append(name)
     command = wheel_build_command(out_dir)
     if args.dry_run:
-        key_state = "present" if pubkey else "absent, so a placeholder key is rendered"
-        print(f"would render files/host and files/backend under {out_dir} (rig key {key_file}: {key_state})")
+        key_state = "present" if not missing else f"{', '.join(missing)} absent, so placeholder keys are rendered"
+        print(f"would render files/host and files/backend under {out_dir} (key pairs in {config.secrets_dir()}: {key_state})")
         print(f"would run in {checkout}: {shlex.join(command)}")
         retval = 0
         return retval
-    if pubkey is None:
-        print(f"render: no rig key at {key_file}; rendering a placeholder key (`image build` or `client-host new` "
-              "mints the real one)")
-        pubkey = RIG_PUBKEY_PLACEHOLDER
-    values = sample_values(RIG_PUBKEY=pubkey)
+    if missing:
+        print(f"render: no {' or '.join(missing)} in {config.secrets_dir()}; rendering a placeholder key (`image build`, "
+              "`client-host new` or `new` mints the real ones)")
+    values = sample_values(**overrides)
     for role in ROLES:
         try:
             written = render_role(role, values, out_dir)

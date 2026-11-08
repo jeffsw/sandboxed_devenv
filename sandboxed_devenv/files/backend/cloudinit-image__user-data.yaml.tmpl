@@ -149,6 +149,16 @@ packages:
   - libxi6
 
 ssh_pwauth: false
+# The VM's SSH host key, minted by the control side into this seed so its public half is pinned
+# on the control side and the client host before the VM boots: no trust on first use. Only the
+# ed25519 key exists (ssh_genkeytypes), so nothing unpinned answers.
+ssh_deletekeys: true
+ssh_genkeytypes: [ed25519]
+ssh_keys:
+  ed25519_private: |
+@@HOST_KEY_PRIVATE@@
+  ed25519_public: @@HOST_KEY_PUBLIC@@
+
 users:
   # The untrusted side. Only the rig key reaches it; the control machine and the client
   # sandbox both hold that key.
@@ -159,7 +169,9 @@ users:
     sudo: ALL=(ALL) NOPASSWD:ALL
     lock_passwd: true
     ssh_authorized_keys:
-      - @@RIG_PUBKEY@@
+      # The control side's key only: the build VM is the control side's, and a project's seed
+      # adds the sandbox key for gw.
+      - @@CONTROL_PUBKEY@@
 
 runcmd:
   # Unpack the IDE backend under /opt, picking the tarball for this CPU (versions.yaml).

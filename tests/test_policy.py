@@ -39,7 +39,7 @@ def test_user_policy_overrides_the_package_copy(tmp_path, monkeypatch):
 
 def test_nftables_renders_from_the_policy(tmp_path, monkeypatch):
     monkeypatch.setenv("SANDBOXED_DEVENV_HOME", str(tmp_path))
-    values = render.default_values(config.UserConfig(), RIG_PUBKEY=PUBKEY)
+    values = render.default_values(config.UserConfig(), CONTROL_PUBKEY=PUBKEY)
     assert values["VM_SUBNET"] == "192.168.64.0/24"
     assert values["BACKEND_ALLOWED"].startswith("elements = { 140.82.112.0/20, ")
     assert values["CLIENT_ALLOWED"] == "# no elements"
@@ -62,7 +62,7 @@ def test_nftables_renders_from_the_policy(tmp_path, monkeypatch):
 def test_desk_network_config_routes_both_halves_through_the_mac(tmp_path, monkeypatch):
     monkeypatch.setenv("SANDBOXED_DEVENV_HOME", str(tmp_path))
     user_config = config.UserConfig(client_host="ssh://jsw@192.168.64.10")
-    values = render.default_values(user_config, RIG_PUBKEY=PUBKEY)
+    values = render.default_values(user_config, CONTROL_PUBKEY=PUBKEY, **render.sample_host_key())
     assert values["CLIENT_HOST_USER"] == "jsw"
     network = yaml.safe_load(render.cloudinit_document("host", "cloudinit", "network-config", values))
     ethernet = network["ethernets"]["enp0s1"]

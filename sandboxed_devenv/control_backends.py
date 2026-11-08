@@ -212,10 +212,12 @@ def project_config(project: str, repositories: list[str], write: bool, identity:
 
 
 def write_project_seed(seed_dir, user_config: config.UserConfig, project: config.ProjectConfig, hostname: str,
-                       address: str, public_key: str) -> None:
-    """The NoCloud seed for a project's backend: the project user-data, meta-data with a fresh
-    instance id, and the static network-config."""
-    values = render.default_values(user_config, RIG_PUBKEY=public_key)
+                       address: str, keys: dict[str, str], host_key: tuple[str, str]) -> None:
+    """The NoCloud seed for a project's backend: the project user-data (the control and sandbox
+    keys for dev, the VM's own host key pair), meta-data with a fresh instance id, and the static
+    network-config."""
+    values = render.default_values(user_config, **keys)
+    values.update(render.host_key_values(*host_key))
     values.update(render.project_values(project, hostname, address))
     user_data = render.cloudinit_document("backend", "cloudinit-project", "user-data", values)
     network_config = render.cloudinit_document("backend", "cloudinit", "network-config", values)
@@ -340,15 +342,19 @@ def launch(user_config: config.UserConfig, driver: control_driver.Driver, runner
     keys on the client host; returns the backend's status report. The inventory record is saved
     before the VM starts, so a failure leaves something `rm` can clean up."""
     hostname = hostname_for(record.vm_name)
-    public_key = control_creds.rig_public_key()
+    keys = control_creds.seed_key_values(False, runner)
+    host_private, host_public = remote.generate_host_key(hostname)
+    record.ssh_host_key = host_public
     work_dir = config.images_dir() / f"{NEW_DIR_PREFIX}{record.project}"
     if work_dir.exists():
         shutil.rmtree(work_dir)
     work_dir.mkdir(parents=True)
     try:
         seed_dir = work_dir / "seed"
-        write_project_seed(seed_dir, user_config, project, hostname, record.address, public_key)
+        write_project_seed(seed_dir, user_config, project, hostname, record.address, keys, (host_private, host_public))
+        del host_private
         remote.forget_host_keys(record.vm_name)
+        remote.pin_host_key(record.vm_name, record.address, host_public)
         with common.slow_step(command, "create", why_disk):
             driver.create(VmSpec(name=record.vm_name, disk=disk, cpus=record.cpus, memory_gib=record.memory_gib,
                                  seed_dir=seed_dir))
@@ -360,11 +366,11 @@ def launch(user_config: config.UserConfig, driver: control_driver.Driver, runner
     retval = wait_until_ready(backend, command)
     record.repos = repository_records(retval, project.repositories)
     control_inventory.save(record)
-    keys = retval.get("ssh_host_keys") or []
-    if keys:
-        client_connect(user_config, runner, host_connect.add_arguments(record.project, record.address, keys), command)
-    else:
-        print(f"{command}: the backend reported no SSH host keys; `connect add` skipped", file=sys.stderr)
+    reported = retval.get("ssh_host_keys") or []
+    if reported and host_public.split()[:2] not in [key.split()[:2] for key in reported]:
+        print(common.warning(f"{command}: the backend reports host keys other than the one in its seed: {reported}; "
+                             "the seed's key is what gets pinned"), file=sys.stderr)
+    client_connect(user_config, runner, host_connect.add_arguments(record.project, record.address, [host_public]), command)
     return retval
 
 
@@ -386,8 +392,9 @@ def new_plan_lines(record: ProjectRecord, project: config.ProjectConfig, image: 
         f"would render the project seed: hostname {hostname_for(record.vm_name)}, repositories {repos}, "
         f"git identity {project.git.user_name} <{project.git.user_email}>, "
         f"Claude token {'present' if project.claude_oauth_token else 'absent'}{', disposable' if record.disposable else ''}",
+        "would mint the VM's SSH host key into the seed and pin it, with the control and sandbox keys for dev",
         f"would start it, wait for SSH as dev@{record.address}, then for `backend status` to report ready",
-        f"would run `connect add {record.project} {record.address} HOSTKEY...` on the client host ({user_config.client_host})",
+        f"would run `connect add {record.project} {record.address} HOSTKEY` on the client host ({user_config.client_host})",
         f"would record it in {control_inventory.record_path(record.project)}",
     ]
     if project.repositories:
@@ -408,11 +415,7 @@ def new(args) -> int:
     image = base_image(user_config)
     if image.driver != driver.name:
         raise DriverError(f"{image.name} was built for the {image.driver} driver, not {driver.name}")
-    if args.dry_run:
-        public_key = control_creds.rig_public_key() if remote.rig_key_path().is_file() else "ssh-ed25519 (minted on the real run)"
-    else:
-        control_creds.ensure_rig_key(runner)
-        public_key = control_creds.rig_public_key()
+    control_creds.seed_key_values(args.dry_run, runner)
     identity = git_identity(user_config, runner)
     project = project_config(args.project, args.repo, args.deploy_key_grants_repo_write, identity)
     address = control_inventory.allocate_address(user_config)
@@ -439,7 +442,6 @@ def new(args) -> int:
               f"`sandboxed-devenv ssh {args.project}`); `sandboxed-devenv rm {args.project}` removes it", file=sys.stderr)
         retval = 1
         return retval
-    _ = public_key
     control_creds.record_token(record, project.claude_oauth_token)
     control_inventory.save(record)
     left = 0

@@ -97,7 +97,8 @@ backend:
     mode: "0644"
     template: false
     stage: image
-    description: Keys only and no agent forwarding into the VM.
+    description: >-
+      Keys only, no agent forwarding into the VM, and the one host key the seed minted.
   home__dev__.ssh__config.ssh_config:
     dest: /home/dev/.ssh/config
     owner: dev

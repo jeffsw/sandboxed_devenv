@@ -15,7 +15,10 @@ from sandboxed_devenv import common, config, control_creds, control_driver, cont
 
 CHECKOUT = pathlib.Path(__file__).resolve().parent.parent
 PUBKEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA test"
-HOST_KEYS = ["ssh-ed25519 AAAAhost", "ecdsa-sha2-nistp256 AAAAecdsa"]
+SANDBOX_PUBKEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB gw@test"
+# One real host key pair for every test, generated once: what the control side mints per VM.
+HOST_KEY = remote.generate_host_key("test")
+HOST_KEYS = [HOST_KEY[1]]
 
 
 @pytest.fixture
@@ -35,6 +38,7 @@ class FakeDriver:
         self.seeds = {}
         self.calls = []
         self.live_resources = {}
+        self.pinned_at_start = {}
 
     def available(self):
         retval = None
@@ -53,6 +57,9 @@ class FakeDriver:
 
     def start(self, name):
         self.calls.append(("start", name))
+        # Pinned before the first boot, or not at all: what the known_hosts file held at start.
+        pinned = remote.known_hosts_file(name)
+        self.pinned_at_start[name] = pinned.read_text() if pinned.is_file() else None
         self.vms[name] = control_driver.STARTED
 
     def stop(self, name, force=False):
@@ -277,8 +284,10 @@ def rig(tmp_path, monkeypatch):
     naming desk as the client host, and the driver, backends, client host and GitHub as fakes."""
     monkeypatch.setenv("SANDBOXED_DEVENV_HOME", str(tmp_path))
     (tmp_path / "secrets").mkdir()
-    (tmp_path / "secrets" / "gw_ed25519").write_text("private")
-    (tmp_path / "secrets" / "gw_ed25519.pub").write_text(PUBKEY + "\n")
+    (tmp_path / "secrets" / "control_ed25519").write_text("private")
+    (tmp_path / "secrets" / "control_ed25519.pub").write_text(PUBKEY + "\n")
+    (tmp_path / "secrets" / "sandbox_ed25519").write_text("private")
+    (tmp_path / "secrets" / "sandbox_ed25519.pub").write_text(SANDBOX_PUBKEY + "\n")
     (tmp_path / "config.yaml").write_text(
         "client_host: ssh://jsw@192.168.64.10\ngit:\n  user_name: Dev\n  user_email: dev@example.invalid\n")
     images = config.images_dir()
@@ -305,10 +314,12 @@ def rig(tmp_path, monkeypatch):
     monkeypatch.setattr(remote, "backend", fake_backend)
     monkeypatch.setattr(remote, "client_host", lambda user_config, runner=None: client)
     monkeypatch.setattr(control_inventory, "address_answers", lambda address, timeout=1.0: False)
-    monkeypatch.setattr(control_creds, "ensure_rig_key", lambda runner=None: tmp_path / "secrets" / "gw_ed25519")
+    monkeypatch.setattr(control_creds, "ensure_keys",
+                        lambda runner=None: (tmp_path / "secrets" / "control_ed25519", tmp_path / "secrets" / "sandbox_ed25519"))
+    monkeypatch.setattr(remote, "generate_host_key", lambda comment: HOST_KEY)
     monkeypatch.setattr(control_creds, "GitHub", lambda runner=None: github)
     monkeypatch.setattr(control_creds, "require_gh", lambda: "/opt/homebrew/bin/gh")
     monkeypatch.setattr("sys.stdin", _NoTty())
     retval = {"home": tmp_path, "driver": driver, "backends": backends, "client": client, "github": github, "image": name,
-              "pubkey": PUBKEY, "host_keys": HOST_KEYS}
+              "pubkey": PUBKEY, "sandbox_pubkey": SANDBOX_PUBKEY, "host_key": HOST_KEY, "host_keys": HOST_KEYS}
     return retval

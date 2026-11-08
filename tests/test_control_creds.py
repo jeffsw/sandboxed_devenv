@@ -1,6 +1,7 @@
 """`repo add / rm / ls`, `creds ls / rotate / audit`, and the GitHub client, against the fakes in conftest."""
 
 import json
+import socket
 import subprocess
 
 import pytest
@@ -126,18 +127,19 @@ def test_repo_rm_revokes_then_removes_and_keeps_pending_on_failure(rig, capsys):
     assert cli.main(["repo", "rm", "p", "jeffsw/nope"]) == 1
 
 
-def test_creds_ls_lists_keys_the_token_and_the_rig_key(rig, capsys):
+def test_creds_ls_lists_keys_the_token_and_the_key_pairs(rig, capsys):
     (rig["home"] / "secrets" / "claude_oauth_token").write_text("secret-value-xyz\n")
     assert cli.main(["creds", "ls"]) == 0
-    assert "rig-key" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "control-key" in out and "sandbox-key" in out
     assert cli.main(["new", "p", "--repo", "jeffsw/a"]) == 0
     capsys.readouterr()
     assert cli.main(["creds", "ls", "p", "--json"]) == 0
     rows = json.loads(capsys.readouterr().out)
     kinds = [row["kind"] for row in rows]
-    assert kinds == ["rig-key", "deploy-key", "claude-token"]
-    assert rows[1]["id"] == 1001 and rows[1]["state"] == "active"
-    assert rows[2]["fingerprint"].startswith("sha256:")
+    assert kinds == ["control-key", "sandbox-key", "deploy-key", "claude-token"]
+    assert rows[2]["id"] == 1001 and rows[2]["state"] == "active"
+    assert rows[3]["fingerprint"].startswith("sha256:")
     assert "secret-value-xyz" not in json.dumps(rows)  # only the hash, never the token
     assert cli.main(["creds", "ls"]) == 0
     out = capsys.readouterr().out
@@ -220,3 +222,31 @@ def test_creds_audit_finishes_a_removed_backend(rig, capsys):
     assert control_inventory.load("p") is None
     assert rig["github"].keys["jeffsw/a"] == []
     assert cli.main(["creds", "ls"]) == 0
+
+
+def test_ensure_keys_renames_the_legacy_pair_and_mints_the_sandbox_key(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SANDBOXED_DEVENV_HOME", str(tmp_path))
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "gw_ed25519").write_text("old private")
+    (secrets / "gw_ed25519.pub").write_text("ssh-ed25519 OLD gw@mac\n")
+    control, sandbox = control_creds.ensure_keys()
+    out = capsys.readouterr().out
+    assert "renamed to control_ed25519" in out and "sandbox key pair created" in out
+    assert control == secrets / "control_ed25519" and control.read_text() == "old private"
+    assert not (secrets / "gw_ed25519").exists()
+    assert control_creds.control_public_key() == "ssh-ed25519 OLD gw@mac"
+    sandbox_public = control_creds.sandbox_public_key()
+    assert sandbox_public.startswith("ssh-ed25519 ")
+    assert sandbox_public.endswith(f"gw@{socket.gethostname()}")
+    assert oct(sandbox.stat().st_mode & 0o777) == "0o600"
+    again = control_creds.ensure_keys()
+    assert again == (control, sandbox)
+    assert capsys.readouterr().out == ""
+    keys = control_creds.seed_key_values(False, None)
+    assert keys["CONTROL_PUBKEY"] == "ssh-ed25519 OLD gw@mac"
+    assert keys["SANDBOX_PUBKEY"] == control_creds.sandbox_public_key()
+    sandbox.unlink()
+    sandbox.with_suffix(".pub").unlink()
+    assert control_creds.seed_key_values(True, None)["SANDBOX_PUBKEY"] == "ssh-ed25519 (minted on the real run)"
+    assert not sandbox.exists()
