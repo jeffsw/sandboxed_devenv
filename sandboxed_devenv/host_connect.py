@@ -13,7 +13,8 @@ them as root on the client host, where `new` runs it through remote.py:
   focus and keeps what it read when it exits (tried on desk, 8 November 2026: an entry written
   under a running Gateway appeared in its dialog after a click on the window, opened a session,
   and was still in the file after Gateway quit), so the entry is written whether or not Gateway
-  runs; with Gateway running the command says that a click on its window makes it appear.
+  runs. With Gateway running the command says so, as a plain line, not a warning: nothing is
+  wrong, and a window that already has focus needs to lose and regain it for the reload.
 
 `connect rm` undoes the three; `connect ls` lists what is there. Nothing here touches routes:
 the desk cloud-init carries routes to both halves of the VM subnet (PLAN.md M2), and the Linux
@@ -329,7 +330,7 @@ def cmd_add(args) -> int:
     ]
     if gateway_running(paths):
         print(f"{command}: Gateway is running as {paths.user}; it reloads {paths.ssh_configs.name} when its window regains "
-              "focus, so the connection appears after a click on the window", flush=True)
+              "focus: click another window, then Gateway's, and the connection is in its dialog. No restart needed.", flush=True)
     content = ssh_configs_with(read_text(paths.ssh_configs), args.project, args.address, paths.gateway_branch)
     outcomes.append(sync_file(paths.ssh_configs, content.encode(), paths.user, paths.group, 0o600, apply))
     retval = finish(command, outcomes, args.dry_run)
@@ -360,8 +361,8 @@ def cmd_rm(args) -> int:
     text = read_text(paths.ssh_configs)
     if text and entry_id(args.project) in text:
         if gateway_running(paths):
-            print(f"{command}: Gateway is running as {paths.user}; the connection disappears from its dialog after a click "
-                  "on the window", flush=True)
+            print(f"{command}: Gateway is running as {paths.user}; click another window, then Gateway's, and the connection "
+                  "is gone from its dialog. No restart needed.", flush=True)
         content = ssh_configs_without(text, args.project, paths.gateway_branch)
         outcomes.append(sync_file(paths.ssh_configs, content.encode(), paths.user, paths.group, 0o600, apply))
     else:

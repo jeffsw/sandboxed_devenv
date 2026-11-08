@@ -112,11 +112,11 @@ def test_add_and_rm_write_the_gateway_file_while_gateway_runs_and_say_so(paths, 
     monkeypatch.setattr(host_connect, "gateway_running", lambda paths: True)
     assert cli.main(["connect", "add", "p", "192.168.64.23", KEYS[0]]) == 0
     out = capsys.readouterr().out
-    assert "Gateway is running" in out and "click on the window" in out
+    assert "Gateway is running" in out and "click another window, then Gateway's" in out and "No restart needed" in out
     assert host_connect.ssh_configs_entries(paths.ssh_configs.read_text())[0]["host"] == "192.168.64.23"
     assert cli.main(["connect", "rm", "p"]) == 0
     out = capsys.readouterr().out
-    assert "disappears from its dialog" in out
+    assert "gone from its dialog" in out
     assert host_connect.ssh_configs_entries(paths.ssh_configs.read_text()) == []
 
 
