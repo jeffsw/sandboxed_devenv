@@ -84,6 +84,13 @@ def test_tool_runs_the_global_command_and_parses_json():
     assert runner.kwargs[0]["capture_output"] is True
 
 
+def test_tool_without_the_json_flag():
+    runner = FakeRunner([(0, json.dumps({"created": True}))])
+    result = make_remote(runner).tool(["backend", "repo", "rekey", "o/r"], parse_json=True, json_flag=False)
+    assert result == {"created": True}
+    assert runner.commands[0][-1] == f"{common.GLOBAL_COMMAND_PATH} backend repo rekey o/r"
+
+
 def test_tool_with_sudo_and_bad_json():
     runner = FakeRunner([(0, "not json")])
     with pytest.raises(remote.RemoteError):

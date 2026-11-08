@@ -652,7 +652,7 @@ def clone(args) -> int:
     backend = remote.backend(address, new_vm, runner)
     rekeyed = []
     for repository in project.repositories:
-        result = backend.tool(["backend", "repo", "rekey", repository.name], parse_json=True)
+        result = backend.tool(["backend", "repo", "rekey", repository.name], parse_json=True, json_flag=False)
         rekeyed.append(result)
     if rekeyed:
         status = backend.status()

@@ -112,13 +112,16 @@ class Remote:
                               + (f": {detail}" if detail else ""))
         return retval
 
-    def tool(self, args: list[str], sudo: bool = False, parse_json: bool = False, check: bool = True):
-        """`sandboxed-devenv ARGS` on the far side; with ``parse_json`` the parsed ``--json`` output."""
+    def tool(self, args: list[str], sudo: bool = False, parse_json: bool = False, check: bool = True,
+             json_flag: bool = True):
+        """`sandboxed-devenv ARGS` on the far side; with ``parse_json`` the output parsed as JSON,
+        after adding ``--json`` to the command unless ``json_flag`` is off (for the `backend repo`
+        commands, which print JSON and take no flag)."""
         remote_command = [self.command_path, *args]
         if sudo:
             remote_command = ["sudo", *remote_command]
         if parse_json:
-            if "--json" not in args:
+            if json_flag and "--json" not in args:
                 remote_command.append("--json")
             completed = self.run(remote_command, check=check, capture=True)
             text = completed.stdout or ""

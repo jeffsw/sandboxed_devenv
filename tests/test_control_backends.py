@@ -127,9 +127,10 @@ class FakeBackend:
         retval = self.status()
         return retval
 
-    def tool(self, args, sudo=False, parse_json=False, check=True):
+    def tool(self, args, sudo=False, parse_json=False, check=True, json_flag=True):
         self.calls.append(("tool", tuple(args)))
         if args[:3] == ["backend", "repo", "rekey"]:
+            assert json_flag is False, "the backend repo commands take no --json flag"
             retval = {"repository": args[3], "fingerprint": "SHA256:new", "public_key": "ssh-ed25519 NEW", "created": True}
         else:
             retval = {}
