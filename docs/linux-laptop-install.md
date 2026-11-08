@@ -5,7 +5,18 @@ in a sandboxed IDE, with the laptop as the control machine and its own client ho
 driving the backend VMs (PLAN.md, M5). Written before the laptop arrived; the items marked "to
 confirm" are what its first run settles.
 
-## The operating system
+Four stages, each a section below:
+
+```mermaid
+flowchart LR
+  os["1. The operating system<br/>Ubuntu 26.04, full-disk encryption,<br/>GNOME on Wayland, a separate principal for routers"]
+  pkgs["2. Packages<br/>incus, pipx, gh, git, xorriso;<br/>incus-admin, incus admin init, the sudoers rule"]
+  tool["3. sandboxed-devenv<br/>the package and its configuration;<br/>sudo sandboxed-devenv host install;<br/>sandboxed-devenv image build"]
+  first["4. The first project<br/>sandboxed-devenv new, Gateway from client start,<br/>test host, test backend, test-e2e"]
+  os --> pkgs --> tool --> first
+```
+
+## 1. The operating system
 
 1. Ubuntu 26.04 (what Framework certifies for the 13 Pro, and the release the VMs run, so the
    AppArmor profiles, pipx 1.8.0 and the kernel match). Full-disk encryption. No separate
@@ -16,7 +27,7 @@ confirm" are what its first run settles.
 3. The desktop session is GNOME on Wayland (the default). The client sandbox needs the Wayland
    socket and nothing else.
 
-## Packages
+## 2. Packages
 
 ```sh
 sudo apt install incus pipx gh git xorriso
@@ -39,7 +50,9 @@ echo "$USER ALL=(root) NOPASSWD: /usr/local/bin/sandboxed-devenv" | sudo tee /et
 sudo chmod 440 /etc/sudoers.d/sandboxed-devenv
 ```
 
-## The package and its configuration
+## 3. sandboxed-devenv
+
+### The package and its configuration
 
 ```sh
 gh auth login                             # the browser flow; then let git use the same login
@@ -71,7 +84,7 @@ with `scp`, mode 0600. The key pairs are not copied; the laptop mints its own.
 `doctor` should say control: yes (incus), client host: not provisioned, the secrets and the
 GitHub login.
 
-## The client host
+### The client host
 
 ```sh
 sudo sandboxed-devenv host install
@@ -85,21 +98,30 @@ in, then in the GNOME session `sandboxed-devenv client start` runs Gateway as `g
 To confirm: the AppArmor profiles load on the laptop's kernel and the client's embedded
 browser works under Ubuntu's user-namespace restriction, as they do on desk.
 
-## The base image and the first project
+### The base image
 
 ```sh
 sandboxed-devenv image build              # Ubuntu's cloud image imported into Incus, booted once, published
+```
+
+The first real run of the Incus driver. To confirm, in this order: the imported cloud image
+boots as a VM (UEFI, secure boot on); cloud-init finds the seed ISO attached as a disk device
+by its `cidata` label; the static lease on `incusbr0` gives the build VM the address the
+control side pinned its host key under; `incus publish` keeps the image as an alias.
+
+## 4. The first project
+
+```sh
 sandboxed-devenv new PROJECT --repo OWNER/REPO
 sandboxed-devenv test host
 sandboxed-devenv test backend PROJECT
 mise run test-e2e                         # from the checkout
 ```
 
-To confirm on Incus, in this order: the imported cloud image boots as a VM (UEFI, secure boot
-on); cloud-init finds the seed ISO attached as a disk device by its `cidata` label; the static
-lease on `incusbr0` gives the backend the address the control side pinned its host key under;
-`incus publish` and `incus init` from the alias; `incus copy` for `clone`; and the egress
-ruleset on the bridge once `enforce` is on. Record the timings in the summary (step 6 of 4.9).
+In Gateway, started by `sandboxed-devenv client start` in the GNOME session, the project's
+connection is listed and `/home/dev/proj/PROJECT` opens. To confirm here: `incus init` from
+the alias, `incus copy` for `clone`, and the egress ruleset on the bridge once `enforce` is on.
+Record the timings in the summary (step 6 of 4.9).
 
 ## Differences from the Mac rig
 
