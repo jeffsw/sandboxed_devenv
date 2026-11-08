@@ -557,8 +557,10 @@ Parity with today's rig, then the old scripts go.
       on the user's project: the key the backend had minted was registered (id recorded,
       state `active`), the repository cloned, and the JetBrains Client connected; `creds
       audit` then reported only the two stale keys of earlier backends, with foreign
-      titles, left alone. The first real `new --repo` and `rm` with no manual step are
-      the gate.
+      titles, left alone. Then `new m3test --repo jeffsw/sandboxed_devenv` registered its
+      key and cloned by itself (ready in 19 s) and `rm m3test --yes` revoked the key before
+      deleting the VM, with the audit clean afterwards apart from those two stale keys:
+      the GitHub half of the M3 gate, met 8 November.
 - [ ] Split the rig key in two. Today one pair, `secrets/gw_ed25519`, is both the control
       side's login to every VM (desk as `jsw`, backends as `dev`) and gw's key to the
       backends (`/home/gw/.ssh/vm_ed25519`). On the Mac rig desk's `jsw` account authorizes
@@ -671,7 +673,7 @@ Written before the laptop arrives, first run on it.
 | M0 scaffold | `mise run verify` green with the package installed and one test | CI |
 | M1 client host | `desk` rebuilt from the slim template with the package installed; `sandboxed-devenv host check` 0 FAIL; Gateway via `client start`; preview and clipboard work | Mac |
 | M2 drivers and backend split | `sandboxed-devenv new` to a connected client on the Mac, the package installed in the backend; old scripts deleted. Status 8 November: `new` ready in 17 s with the connection written for gw on desk, gw's SSH to the backend proven, scripts deleted; left: a desk from `client-host new` and the connection opened in Gateway's window | Mac |
-| M3 credentials | `sandboxed-devenv new` and `sandboxed-devenv rm` need no manual GitHub or Gateway step | Mac |
+| M3 credentials | `sandboxed-devenv new` and `sandboxed-devenv rm` need no manual GitHub or Gateway step. Status 8 November: the GitHub half met (`new --repo` registered and cloned, `rm` revoked); the Gateway entry is written only while Gateway is closed | Mac |
 | M4 testing | `mise run test-e2e` passes on the Mac unattended, versions matching on all three machines | Mac |
 | M5 Linux laptop | `sandboxed-devenv test end-to-end` passes on the laptop; first real project opened | Linux laptop |
 
