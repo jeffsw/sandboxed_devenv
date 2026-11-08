@@ -24,6 +24,7 @@ PLANNED_COMMANDS = [
     ("clone",),
     ("resources",),
     ("client-host", "new"),
+    ("client-host", "provision"),
     ("client-host", "rm"),
     ("client-host", "ssh"),
     ("repo", "add"),

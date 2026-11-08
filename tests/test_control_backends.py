@@ -20,6 +20,7 @@ def test_new_dry_run_prints_the_plan(rig, capsys):
     assert status == 0
     out = capsys.readouterr().out
     assert "would launch idesbx-m2test for project m2test" in out
+    assert "would mint the VM's SSH host key" in out
     assert "2 CPUs and 8 GiB at 192.168.64.20" in out
     assert "repositories jeffsw/a" in out
     assert "connect add m2test 192.168.64.20" in out
@@ -41,7 +42,14 @@ def test_new_launches_records_registers_and_connects(rig, capsys):
     assert set(seed) == {"user-data", "meta-data", "network-config"}
     user_data = yaml.safe_load(seed["user-data"])
     assert user_data["hostname"] == "idesbx-m2test"
-    assert rig["pubkey"] in seed["user-data"]
+    assert user_data["users"][0]["ssh_authorized_keys"] == [rig["pubkey"], rig["sandbox_pubkey"]]
+    assert user_data["ssh_keys"]["ed25519_public"] == rig["host_key"][1]
+    assert user_data["ssh_keys"]["ed25519_private"] == rig["host_key"][0]
+    assert user_data["ssh_genkeytypes"] == ["ed25519"]
+    pinned = driver.pinned_at_start["idesbx-m2test"]
+    assert pinned == f"192.168.64.20 {' '.join(rig['host_key'][1].split()[:2])}\n"
+    assert remote.known_hosts_file("idesbx-m2test").read_text() == pinned
+    assert control_inventory.require("m2test").ssh_host_key == rig["host_key"][1]
     assert "192.168.64.20/24" in seed["network-config"]
     assert seed["meta-data"].startswith("instance-id: idesbx-m2test-")
     backend = rig["backends"]["192.168.64.20"]
@@ -59,7 +67,7 @@ def test_new_launches_records_registers_and_connects(rig, capsys):
     assert record.repos[0].fingerprint == "SHA256:jeffsw/a"
     assert record.repos[0].checkout.startswith("/home/dev/proj/")
     assert record.repos[0].registered is not None
-    assert rig["client"].calls == [(("connect", "add", "m2test", "192.168.64.20", *rig["host_keys"]), True)]
+    assert rig["client"].calls == [(("connect", "add", "m2test", "192.168.64.20", rig["host_key"][1]), True)]
     assert "m2test ready: idesbx-m2test at 192.168.64.20" in out
     assert "deploy key registered on GitHub as id 1001 (write)" in out
     assert "cloned to /home/dev/proj/" in out

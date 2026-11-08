@@ -46,7 +46,7 @@ def test_ssh_command_carries_every_option_and_joins_the_remote_command():
     assert "IdentitiesOnly=yes" in command
     assert "IdentityAgent=none" in command
     assert "ForwardAgent=no" in command
-    assert "StrictHostKeyChecking=accept-new" in command
+    assert "StrictHostKeyChecking=yes" in command
     assert "UserKnownHostsFile=/kh/idesbx-image-build" in command
     assert command[command.index("-i") + 1] == "/secrets/gw_ed25519"
     assert command[command.index("-p") + 1] == "22"
@@ -181,15 +181,16 @@ def test_parse_client_host():
             remote.parse_client_host(bad)
 
 
-def test_backend_and_client_host_use_the_rig_key_and_per_machine_known_hosts(tmp_path, monkeypatch):
+def test_backend_and_client_host_use_the_control_key_and_per_machine_known_hosts(tmp_path, monkeypatch):
     monkeypatch.setenv("SANDBOXED_DEVENV_HOME", str(tmp_path))
     with pytest.raises(remote.RemoteError):
         remote.backend("192.168.64.21", "idesbx-x")
     (tmp_path / "secrets").mkdir()
-    (tmp_path / "secrets" / "gw_ed25519").write_text("key")
+    (tmp_path / "secrets" / "control_ed25519").write_text("key")
     target = remote.backend("192.168.64.21", "idesbx-x")
     assert target.user == "dev"
-    assert target.key == tmp_path / "secrets" / "gw_ed25519"
+    assert target.key == tmp_path / "secrets" / "control_ed25519"
+    assert remote.sandbox_key_path() == tmp_path / "secrets" / "sandbox_ed25519"
     assert target.known_hosts == tmp_path / "known_hosts" / "idesbx-x"
     assert target.known_hosts.parent.is_dir()
     target.known_hosts.write_text("192.168.64.21 ssh-ed25519 AAAA\n")
@@ -210,3 +211,15 @@ def test_local_runs_the_command_here(tmp_path):
     source.write_text("wheel")
     local.push([source], str(tmp_path / "b.whl"))
     assert (tmp_path / "b.whl").read_text() == "wheel"
+
+
+def test_host_key_generation_and_pinning(tmp_path, monkeypatch):
+    monkeypatch.setenv("SANDBOXED_DEVENV_HOME", str(tmp_path))
+    private, public = remote.generate_host_key("idesbx-x")
+    assert private.startswith("-----BEGIN OPENSSH PRIVATE KEY-----")
+    assert public.startswith("ssh-ed25519 ") and public.endswith(" idesbx-x")
+    pinned = remote.pin_host_key("idesbx-x", "192.168.64.21", public)
+    assert pinned == tmp_path / "known_hosts" / "idesbx-x"
+    assert pinned.read_text() == f"192.168.64.21 {' '.join(public.split()[:2])}\n"
+    remote.pin_host_key("idesbx-x", "192.168.64.21", "ssh-ed25519 OTHER")
+    assert pinned.read_text() == "192.168.64.21 ssh-ed25519 OTHER\n"

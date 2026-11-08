@@ -18,7 +18,7 @@ ENTRIES = []
 for role_, entries_ in MANIFEST.items():
     for name_ in entries_:
         ENTRIES.append((role_, name_))
-TEST_VALUES = render.sample_values(RIG_PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA test")
+TEST_VALUES = render.sample_values(CONTROL_PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA test")
 # What may follow the encoded destination in a name: an added format extension, then .tmpl.
 NAME_TAIL = re.compile(r"(\.[a-z][a-z0-9_]*)?(\.tmpl)?")
 
@@ -141,7 +141,10 @@ def test_render_role_writes_the_tree(tmp_path):
     branch = TEST_VALUES["GATEWAY_BRANCH"]
     gateway_dir = tmp_path / "host" / "files" / "home" / "gw" / ".config" / "JetBrains" / f"JetBrainsGateway{branch}"
     assert (gateway_dir / "options" / "sshConfigs.xml").is_file()
-    assert TEST_VALUES["RIG_PUBKEY"] in (tmp_path / "host" / "cloudinit" / "user-data").read_text()
+    host_user_data = (tmp_path / "host" / "cloudinit" / "user-data").read_text()
+    assert TEST_VALUES["CONTROL_PUBKEY"] in host_user_data
+    assert TEST_VALUES["SANDBOX_PUBKEY"] not in host_user_data.replace(TEST_VALUES["CONTROL_PUBKEY"], "")
+    assert TEST_VALUES["HOST_KEY_PUBLIC"] in host_user_data
 
 
 def test_render_role_backend_writes_both_stages(tmp_path):
@@ -170,8 +173,8 @@ def test_project_values_carry_the_token_only_when_given():
     assert config.ProjectConfig(**yaml.safe_load(base64.b64decode(values["PROJECT_YAML_B64"]))).claude_oauth_token == "tok"
 
 
-def test_render_without_the_rig_key_uses_a_placeholder(tmp_path, monkeypatch, capsys):
-    """CI has no secrets: the documents render with a placeholder key and the run says so."""
+def test_render_without_the_key_pairs_uses_placeholders(tmp_path, monkeypatch, capsys):
+    """CI has no secrets: the documents render with placeholder keys and the run says so."""
     from sandboxed_devenv import cli
 
     monkeypatch.setenv("SANDBOXED_DEVENV_HOME", str(tmp_path))
@@ -181,4 +184,6 @@ def test_render_without_the_rig_key_uses_a_placeholder(tmp_path, monkeypatch, ca
     out = capsys.readouterr().out
     assert "placeholder key" in out
     user_data = (tmp_path / "out" / "host" / "cloudinit" / "user-data").read_text()
-    assert render.RIG_PUBKEY_PLACEHOLDER in user_data
+    assert render.PUBKEY_PLACEHOLDER in user_data
+    project = yaml.safe_load((tmp_path / "out" / "backend" / "cloudinit-project" / "user-data").read_text())
+    assert project["ssh_keys"]["ed25519_public"].startswith("ssh-ed25519 ")

@@ -29,8 +29,10 @@ class FakeDriver:
 def rig(tmp_path, monkeypatch):
     monkeypatch.setenv("SANDBOXED_DEVENV_HOME", str(tmp_path))
     (tmp_path / "secrets").mkdir()
-    (tmp_path / "secrets" / "gw_ed25519").write_text("private")
-    (tmp_path / "secrets" / "gw_ed25519.pub").write_text("ssh-ed25519 AAAA test\n")
+    (tmp_path / "secrets" / "control_ed25519").write_text("private")
+    (tmp_path / "secrets" / "control_ed25519.pub").write_text("ssh-ed25519 AAAA test\n")
+    (tmp_path / "secrets" / "sandbox_ed25519").write_text("private")
+    (tmp_path / "secrets" / "sandbox_ed25519.pub").write_text("ssh-ed25519 BBBB gw@test\n")
     (tmp_path / "config.yaml").write_text("client_host: ssh://jsw@192.168.64.10\n")
     driver = FakeDriver()
     monkeypatch.setattr(control_driver, "load_driver", lambda runner=None: driver)
@@ -45,7 +47,11 @@ def test_new_dry_run_prints_the_plan(rig, capsys):
     assert "hostname desk, user jsw, address 192.168.64.10" in out
     assert "routes to 192.168.64.0/25 and 192.168.64.128/25 via 192.168.64.1" in out
     assert "sudo sandboxed-devenv host install" in out
+    assert "sandbox key pair" in out and "control key only" in out
     assert "would stop and delete" not in out
+    assert cli.main(["--dry-run", "client-host", "provision"]) == 0
+    out = capsys.readouterr().out
+    assert "jsw@192.168.64.10" in out and "sandbox key pair" in out and "gw_ed25519" in out
 
 
 def test_new_refuses_an_existing_desk_unless_replaced(rig, capsys):

@@ -8,7 +8,7 @@ import subprocess
 import pytest
 import yaml
 
-from sandboxed_devenv import cli, common, config, control_driver, control_images, render
+from sandboxed_devenv import cli, common, config, control_driver, control_images, remote, render
 
 PUBKEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA test"
 CHECKSUMS = """63a93bd5a8d76e33b15ceb5daa3657bd79be804748051ab178e643b0f5da22e7 *ubuntu-26.04-server-cloudimg-arm64.img
@@ -36,6 +36,7 @@ def wanted() -> control_images.ImageRecord:
     user_config = config.UserConfig()
     values = control_images.seed_values(user_config, PUBKEY)
     user_data = render.cloudinit_document("backend", "cloudinit-image", "user-data", values)
+    assert render.HOST_KEY_DIGEST_VALUES["HOST_KEY_PUBLIC"] in user_data
     retval = control_images.wanted_record(config.load_versions(), user_config, "aarch64", user_data, "utm")
     return retval
 
@@ -62,7 +63,13 @@ def test_cloud_image_path_and_seed_values(home):
     assert path.name == f"ubuntu-{versions.ubuntu.release}-{versions.ubuntu.image_serial}-aarch64.img"
     values = control_images.seed_values(config.UserConfig(), PUBKEY)
     assert values["ADDRESS"] == "192.168.64.19"
-    assert values["RIG_PUBKEY"] == PUBKEY
+    assert values["CONTROL_PUBKEY"] == PUBKEY
+    assert values["HOST_KEY_PUBLIC"] == render.HOST_KEY_DIGEST_VALUES["HOST_KEY_PUBLIC"]
+    private, public = remote.generate_host_key("x")
+    real = control_images.seed_values(config.UserConfig(), PUBKEY, render.host_key_values(private, public))
+    document = yaml.safe_load(render.cloudinit_document("backend", "cloudinit-image", "user-data", real))
+    assert document["ssh_keys"]["ed25519_public"] == public
+    assert document["ssh_keys"]["ed25519_private"] == private
 
 
 def test_image_user_data_and_network_config_render_for_the_build(home):
@@ -148,8 +155,10 @@ def test_build_dry_run_prints_the_plan(home, monkeypatch, capsys):
 def test_build_is_a_no_op_when_the_image_is_current(home, monkeypatch, capsys):
     monkeypatch.setattr(control_driver, "load_driver", lambda runner=None: FakeDriver())
     (home / "secrets").mkdir()
-    (home / "secrets" / "gw_ed25519").write_text("private")
-    (home / "secrets" / "gw_ed25519.pub").write_text(PUBKEY + "\n")
+    (home / "secrets" / "control_ed25519").write_text("private")
+    (home / "secrets" / "control_ed25519.pub").write_text(PUBKEY + "\n")
+    (home / "secrets" / "sandbox_ed25519").write_text("private")
+    (home / "secrets" / "sandbox_ed25519.pub").write_text(PUBKEY + "\n")
     record = control_images.wanted_record(
         config.load_versions(), config.UserConfig(), common.architecture(),
         render.cloudinit_document("backend", "cloudinit-image", "user-data",
