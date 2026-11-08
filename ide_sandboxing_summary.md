@@ -1,9 +1,10 @@
 # Keeping an IDE away from your keys: options summary and decision notes
 
-Updated 8 November 2026, revision 12. This is the design record for the sandboxed development environment, organised around the design chosen on 8 October: **JetBrains Gateway with its thin client in a small sandbox and the IDE backend in a virtual machine, one VM per project or a disposable one.** The rehearsal rig of 4.9 is built and its first two steps passed on 9 October: the JetBrains Client and the Gateway launcher both run on the Wayland toolkit as a second Unix user under GNOME. Everything else is untested. Figures were read from GitHub, npm, JetBrains documentation and the Mac itself on 7 to 9 October and will go stale. The earlier brainstorming document in this repository, `ide_sandboxing.html`, is kept for history only; what it contributed is restated or cited directly here.
+Updated 8 November 2026, revision 13. This is the design record for the sandboxed development environment, organised around the design chosen on 8 October: **JetBrains Gateway with its thin client in a small sandbox and the IDE backend in a virtual machine, one VM per project or a disposable one.** The rehearsal rig of 4.9 is built and its first two steps passed on 9 October: the JetBrains Client and the Gateway launcher both run on the Wayland toolkit as a second Unix user under GNOME. Everything else is untested. Figures were read from GitHub, npm, JetBrains documentation and the Mac itself on 7 to 9 October and will go stale. The earlier brainstorming document in this repository, `ide_sandboxing.html`, is kept for history only; what it contributed is restated or cited directly here.
 
 ## Revision history
 
+- Revision 13 (8 November, later): two key pairs instead of the rig key: `control_ed25519` for the control side into desk and the backends, `sandbox_ed25519` for `gw` into the backends only, after noticing that one pair let `gw` log into `desk` as its sudo-capable user. Every VM's SSH host key is minted by the control side into its cloud-init seed and pinned before boot, so no connection trusts a key on first use. Deploy keys are registered and revoked through `gh` by `new`, `rm`, `repo` and `creds` (M3). 4.9 and section 5 follow.
 - Revision 12 (8 November): 4.9 rewritten for the package. The rig scripts under `rehearsal/utm/` are gone; `sandboxed-devenv image build`, `client-host new`, `new`, `clone` and `rm` do what they did, with one backend VM per project at an address from a pool, routes to both halves of the VM subnet on `desk`, the connection written for `gw` and Gateway by `connect add`, and an inventory under `~/.sandboxed_devenv/`. The egress policy moved to `policy.yaml`; only address ranges reach the ruleset, since nft refuses a host name that resolves to several addresses. Registering deploy keys on GitHub is the one manual step left (PLAN.md, M3).
 - Revision 11 (17 October): the repository gained `mise run verify` and a GitHub Actions workflow that runs it on every push: the seeds are rendered without building ISOs, then checked with `cloud-init schema`, the AppArmor and nftables parsers, shellcheck, ruff, yamllint, actionlint, this document's house rules and a render of each Mermaid diagram. The client AppArmor profiles lose their `@{exec_path}` rule, which only AppArmor 5 declares. The "Fresh VMs" block in 4.9 now revokes and re-registers the deploy key, which a rebuilt backend mints anew.
 - Revision 10 (9 October, evening): a consolidated pass after a day in the rig. The backend template now installs the everyday tools, `gh` from GitHub's repository, the Claude Code plugin, GitHub's host keys, a git identity and Claude Code's settings with an optional token from `keys/`; the desk template gives the private X server an authorization cookie; the canary checks the SSH client config; the start-up diagrams show `gw-session`, the X server and the pre-provisioned connection. Findings of the day recorded in 4.3, 4.4, 4.5 and 4.9: the embedded browser's needs, the key-access dialog, plugin staging, the settings-file trap, the login callback.
@@ -232,7 +233,7 @@ The short version: you never start the JetBrains Client yourself; Gateway starts
 
 | Secret | Lives in | Opens |
 |---|---|---|
-| `vm_ed25519`, the client sandbox's SSH key | `~/.ssh` of the `gw` user, the client sandbox. In the rehearsal the Mac also keeps it as `rehearsal/utm/keys/gw_ed25519`, where it doubles as the rig key for SSH checks into both VMs. | SSH as `dev` into every backend VM. Its public key is injected by cloud-init when a VM is created. |
+| `vm_ed25519`, the client sandbox's SSH key | `~/.ssh` of the `gw` user, the client sandbox. It is the sandbox key pair, `~/.sandboxed_devenv/secrets/sandbox_ed25519` on the control machine, which `client-host new` and `client-host provision` place on `desk` for `host install`. The control machine's own way into `desk` and the backends is a separate pair, `control_ed25519`, that never leaves it; before revision 13 one pair did both, which let `gw` log into `desk` as its host user. | SSH as `dev` into every backend VM. Its public key is injected by cloud-init when a VM is created. |
 | JetBrains account sign-in | `gw`'s home | The license check on connect |
 | Deploy key (or a fine-grained token) | `~/.ssh` of `dev` inside one VM | One repository on GitHub, read-only or read-write. Generated in the VM at first boot; its public key is added to the repository from the host with `gh repo deploy-key add`. |
 | 1Password agent, router keys, your `gh` token | The host, your own user | Nothing in this picture. No process in the sandbox or in a VM can reach them. |
@@ -364,7 +365,7 @@ Before the Framework arrives, the design is rehearsed in Ubuntu 26.04 VMs on the
 
 What each VM gets:
 
-- `desk`: user `jsw` with a password for the GDM login (`rehearsal`, unless `DESK_PASSWORD` was set when running `client-host new`), passwordless sudo and the rig key authorized for SSH from the Mac; `spice-vdagent` for clipboard sharing with the Mac, which also needs UTM's clipboard setting on, something the driver does since the scripting interface cannot; then `host install`: user `gw` with no sudo and no password, lingering enabled so it has a runtime directory, the Gateway 2026.2.2 tarball unpacked in its home with the toolkit line from 4.6 added, the `vm_ed25519` key and an `ssh_config` that includes one stanza per project from `config.d/`, written by `connect add`; the `client start` / `client session` / `client exec` subcommands (what `gw-run`, `gw-session` and `gw-exec` did: lend the session's Wayland socket to `gw` with `setfacl`, close the other sockets in the runtime directory, a private Xwayland with an authorization cookie for the embedded browser, then Gateway; no login shell, since `sudo --login` passes its command through `bash -c`, which expands every `$variable` before the target user runs it, found 9 October); the AppArmor profiles for the client's Chromium; the `nftables` ruleset from `policy.yaml`, written but not enabled; IP forwarding on. Reboots into GNOME when done.
+- `desk`: user `jsw` with a password for the GDM login (`rehearsal`, unless `DESK_PASSWORD` was set when running `client-host new`), passwordless sudo and the control key authorized for SSH from the Mac (never the sandbox key, which must open backends only); `spice-vdagent` for clipboard sharing with the Mac, which also needs UTM's clipboard setting on, something the driver does since the scripting interface cannot; then `host install`: user `gw` with no sudo and no password, lingering enabled so it has a runtime directory, the Gateway 2026.2.2 tarball unpacked in its home with the toolkit line from 4.6 added, the `vm_ed25519` key and an `ssh_config` that includes one stanza per project from `config.d/`, written by `connect add`; the `client start` / `client session` / `client exec` subcommands (what `gw-run`, `gw-session` and `gw-exec` did: lend the session's Wayland socket to `gw` with `setfacl`, close the other sockets in the runtime directory, a private Xwayland with an authorization cookie for the embedded browser, then Gateway; no login shell, since `sudo --login` passes its command through `bash -c`, which expands every `$variable` before the target user runs it, found 9 October); the AppArmor profiles for the client's Chromium; the `nftables` ruleset from `policy.yaml`, written but not enabled; IP forwarding on. Reboots into GNOME when done.
 - Each backend: user `dev` whose only login is `gw`'s public key; sshd with passwords and agent forwarding off, and an `ssh_config` that never consults an agent; the IntelliJ IDEA Ultimate 2026.2.3 tarball under `/opt/jetbrains/idea`, registered with `registerBackendLocationForGateway`, with the Claude Code plugin installed into it; a JDK, Python, build tools, `uv`, `mise`, `direnv`, `just`, `ripgrep`, `jq` and `gh` from GitHub's repository (all from the base image); then at first boot `backend prepare`: GitHub's SSH host keys, the git identity from the Mac's config (or `config.yaml`), a deploy key pair per repository with an alias stanza binding it, Claude Code's settings carrying the token from `~/.sandboxed_devenv/secrets/claude_oauth_token` when that file exists. The architecture is detected, so the same documents serve the arm64 VMs on the Mac and, as the base image's cloud-init, the x86-64 VMs on the Framework.
 - Both: a static address on UTM's shared network, `desk` at 192.168.64.10 and the backends from 192.168.64.20 upward, so the `ssh_config` stanzas and the allowlist can name them. UTM's shared network marks each VM's port on the Mac's bridge "private", which blocks traffic between VMs at layer 2 while the Mac itself can reach both and forwards between them (found 9 October: `desk` could not ARP for `backend`), so `desk` carries routes to both halves of the subnet, 192.168.64.0/25 and 192.168.64.128/25, through the Mac (192.168.64.1): more specific than its on-link route, and no per-backend change. Each backend has one host route back to `desk`. The interface is named exactly, `enp0s1`, and the renderer is pinned to systemd-networkd. Both come from the first `desk`, which came up on a DHCP address twice (9 October): the desktop install brings NetworkManager and makes it netplan's default renderer, NetworkManager does not accept a glob such as `en*`, and even with the exact name it never applied the static profile, because Ubuntu 26.04's dracut initramfs leaves a catch-all DHCP rule in `/run/systemd/network` that systemd-networkd, still enabled, acts on first; NetworkManager then treats the NIC as externally configured. With the networkd renderer, netplan's own `10-netplan-enp0s1.network` sorts ahead of that rule, which is why `backend` never had the problem.
 
@@ -392,12 +393,13 @@ claude setup-token
 mkdir -p ~/.sandboxed_devenv/secrets && chmod 700 ~/.sandboxed_devenv/secrets
 # paste the token into ~/.sandboxed_devenv/secrets/claude_oauth_token
 
-# The base image. The rig key pair is minted on first use. About two minutes;
+# The base image. The control and sandbox key pairs are minted on first use, and
+# every VM's SSH host key is minted into its seed and pinned before boot. About two minutes;
 # a second run says the image is up to date.
 sandboxed-devenv image build
 
 # The client host VM: cloud-init installs the desktop, then over SSH the
-# package, the rig key pair and `host install`; reboots into GNOME. Ten
+# package, the sandbox key pair and `host install`; reboots into GNOME. Ten
 # minutes or more. Log in at its UTM window as jsw afterwards.
 sandboxed-devenv client-host new
 ```
@@ -423,7 +425,7 @@ sandboxed-devenv ssh ide_sandbox -- sandboxed-devenv backend repo add jeffsw/san
 # The projects with their backend's state, address, resources and repositories.
 sandboxed-devenv ls
 
-# A shell as dev with the rig key, or one command after --. No shell expansion.
+# A shell as dev with the control key, or one command after --. No shell expansion.
 sandboxed-devenv ssh ide_sandbox
 sandboxed-devenv ssh ide_sandbox -- cloud-init status
 
@@ -478,7 +480,7 @@ gh repo deploy-key list --repo jeffsw/sandboxed_devenv
 gh repo deploy-key delete <key-id> --repo jeffsw/sandboxed_devenv
 
 # The state directory: inventory, images, the downloaded cloud image, the
-# known host keys and the secrets (the rig key pair, the token).
+# pinned host keys and the secrets (the two key pairs, the token).
 rm -r ~/.sandboxed_devenv
 
 # Optional: remove the tools. --zap also removes UTM's data directory under
@@ -506,8 +508,8 @@ flowchart LR
   end
   desk -- "SSH 22 as dev, forwarded by the Mac" --> be
   be -. "egress, forwarded only to the allowlist" .-> desk
-  mac_ctl["sandboxed-devenv on the Mac: image build, client-host new, new, clone, rm"] -. "SSH with the rig key" .-> desk
-  mac_ctl -. "SSH with the rig key" .-> be
+  mac_ctl["sandboxed-devenv on the Mac: image build, client-host new, new, clone, rm"] -. "SSH with the control key" .-> desk
+  mac_ctl -. "SSH with the control key" .-> be
   desk --> vmnet
   vmnet --> en0 --> rt --> inet
   inet --> gh
@@ -544,7 +546,7 @@ If the client fails steps 1 and 2 and the private Xwayland is unacceptable, the 
 
 ## 5. Credentials on the host: findings and a hardening plan
 
-This section is hardening, not a prerequisite. The rehearsal and the Framework build mint their own keys: the client sandbox's key is generated by `make-seed.sh`, each VM generates its own deploy key at first boot, and the host's agent, keys and `gh` token are never copied anywhere (4.8). The one rule that applies from day one is never to SSH into a VM with agent forwarding on; the Mac's `ssh_config` enables it for named hosts only, never under `Host *`, so a plain `ssh dev@192.168.64.20` does not forward (checked with `ssh -G` on 8 October). The findings below decide how bad a compromise of the host itself would be, which is worth fixing once the rig works.
+This section is hardening, not a prerequisite. The rehearsal and the Framework build mint their own keys: the sandbox key and the control key are minted by `sandboxed-devenv` into `~/.sandboxed_devenv/secrets/`, each backend mints its own deploy keys at first boot and `new` registers them, and the host's agent, keys and `gh` token are never copied anywhere (4.8). The one rule that applies from day one is never to SSH into a VM with agent forwarding on; the Mac's `ssh_config` enables it for named hosts only, never under `Host *`, so a plain `ssh dev@192.168.64.20` does not forward (checked with `ssh -G` on 8 October). The findings below decide how bad a compromise of the host itself would be, which is worth fixing once the rig works.
 
 Read on 7 October from the local configuration, not from key material.
 

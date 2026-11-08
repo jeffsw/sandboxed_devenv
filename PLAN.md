@@ -202,6 +202,7 @@ it is and whether it is rendered:
 | `sandboxed-devenv image build [--force] [--wheel PATH] [--cpus N] [--memory-gib N]` | control | Downloads the Ubuntu cloud image (checked against its SHA256SUMS), boots it once with the base cloud-init, waits for SSH and cloud-init, pushes and installs the wheel (built from the checkout unless `--wheel` names one), runs `backend prepare --stage image`, `cloud-init clean`, powers off, keeps the disk as the base image with a record of what went in. Skips the build when nothing changed; `--force` rebuilds |
 | `sandboxed-devenv image ls / rm` | control | Base images and their versions |
 | `sandboxed-devenv client-host new [--replace] [--wheel PATH] [--cpus N] [--memory-gib N]` | control | The desk VM on the Mac rig: the cloud image as a raw disk, the host cloud-init and network-config (static address, routes to both halves of the VM subnet), a VM with a display, then over SSH the wheel and `sudo pipx install --global`, the rig key pair into the host user's secrets directory, `sudo sandboxed-devenv host install`, a reboot into GNOME. Refuses when `client_host` is `local`: the laptop is its own client host |
+| `sandboxed-devenv client-host provision [--wheel PATH]` | control | The SSH half of `client-host new` on an existing desk: the wheel and `sudo pipx install --global`, the sandbox key pair into the host user's secrets directory, `sudo sandboxed-devenv host install`. For a newer package, a new sandbox key or a changed policy |
 | `sandboxed-devenv client-host rm [--yes]` | control | Stops and deletes desk |
 | `sandboxed-devenv client-host ssh [CMD]` | control | A shell on desk as its host user with the rig key; with CMD, runs it there. No shell expansion |
 | `sandboxed-devenv new PROJECT [--repo OWNER/REPO]... [--disposable] [--deploy-key-grants-repo-write] [--cpus N] [--memory-gib N]` | control | Launches the backend for PROJECT from the base image with its own cloud-init, waits for `backend status` to report ready, runs `repo add` for each `--repo`, pins the host key, runs `connect add` on the client host, records everything in the inventory. `--repo` is optional and repeatable; repositories can be added later. `--disposable` marks the backend for stranger code, used once and destroyed (summary 4.7): `ls` flags it and `rm` takes no snapshot. `--deploy-key-grants-repo-write` applies to every `--repo` given and registers its key with write access (`gh repo deploy-key add --allow-write`) so the VM can push; the default key is read-only. `--cpus` and `--memory-gib` override the defaults in `config.yaml` (4 and 8) |
@@ -569,21 +570,38 @@ Parity with today's rig, then the old scripts go.
       its window regains focus (StoreReloadManager), so writing the entry and letting the
       user focus Gateway may be enough; else Gateway's host field can take the project's
       alias from gw's `ssh_config` (`Host <project>`), which needs no entry at all.
-- [ ] Split the rig key in two. Today one pair, `secrets/gw_ed25519`, is both the control
-      side's login to every VM (desk as `jsw`, backends as `dev`) and gw's key to the
-      backends (`/home/gw/.ssh/vm_ed25519`). On the Mac rig desk's `jsw` account authorizes
-      that public key, so the client sandbox user holds a key that also logs in as the
-      sudo-capable host user on desk: a sandbox escape in the rehearsal model, found
-      8 November while explaining `client-host new`. Not an issue on the Linux laptop,
-      whose own account never authorizes the rig key. Fix: a control key (the Mac or the
-      laptop into desk and the backends) and a sandbox key (gw into the backends only);
-      backends authorize both in their cloud-init, desk authorizes only the control key,
-      `host install` installs only the sandbox key, and `client-host new` pushes only the
-      sandbox pair to desk's secrets directory. The inventory records both pairs.
-- [ ] Host key pinning: `new` takes the VM's SSH host public key through the driver
-      (Incus can read it from the guest; UTM's serial console carries cloud-init's host
-      key print) before the first SSH connection, then hands it to `connect add`; never
-      trust on first use.
+- [x] Split the rig key in two. Until 8 November one pair, `secrets/gw_ed25519`, was both
+      the control side's login to every VM (desk as `jsw`, backends as `dev`) and gw's key
+      to the backends (`/home/gw/.ssh/vm_ed25519`). On the Mac rig desk's `jsw` account
+      authorizes that public key, so the client sandbox user held a key that also logged
+      in as the sudo-capable host user on desk: a sandbox escape in the rehearsal model,
+      found 8 November while explaining `client-host new`. Not an issue on the Linux
+      laptop, whose own account never authorizes the key. Now: `secrets/control_ed25519`
+      (the Mac or the laptop into desk and the backends) and `secrets/sandbox_ed25519` (gw
+      into the backends only); a backend's seed authorizes both, the image seed and desk's
+      only the control key, `host install` installs the sandbox key (a legacy `gw_ed25519`
+      with a warning), and `client-host new` pushes only the sandbox pair to desk's secrets
+      directory. Migration: a `gw_ed25519` found becomes the control key, since it is what
+      the control side has been logging in with, and the sandbox key is minted beside it;
+      desk then needs `client-host provision` (the SSH half of `client-host new` on an
+      existing desk: wheel, sandbox key, `host install`), and a backend made before the
+      split is reachable by gw again after `rm` and `new`. `creds ls` shows both pairs.
+      Done 8 November.
+- [x] Host key pinning, done the other way round: instead of reading the VM's host key
+      out after boot (the serial console on UTM, the guest on Incus), the control side
+      mints the ed25519 host key pair into the seed with cloud-init's `ssh_keys`
+      (`ssh_deletekeys: true`, `ssh_genkeytypes: [ed25519]`, so no other key exists),
+      pins the public half in `~/.sandboxed_devenv/known_hosts/<vm>` before the VM boots
+      and hands it to `connect add`; `remote.py` checks host keys strictly everywhere,
+      and `accept-new` is gone. The private half exists only inside the seed, where the
+      VM's root reads it; the control side drops it once the seed is written. Works for
+      backends, the build VM and desk; the image record's digest of the image cloud-init
+      is taken with fixed host key values, or every build would look new. Done
+      8 November: the rebuilt image's first boot and a backend from it both connected
+      under strict checking with the pinned key. The backend still had RSA and ECDSA host
+      key files beside it (left by the image's first boot or made by Ubuntu's service), so
+      the backend's `sshd_config.d/10-backend.conf` names the ed25519 key as the only
+      `HostKey`, and sshd offers nothing unpinned.
 - [ ] Secrets dir: `~/.sandboxed_devenv/secrets/` (mode 0700) holding the rig key pair
       and `claude_oauth_token`, one file per secret and none of them in `config.yaml`;
       optional `op://` references there are resolved with the 1Password CLI at render

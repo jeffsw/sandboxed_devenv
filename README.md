@@ -13,7 +13,9 @@ backend, and any AI agent run in per-project VMs with controlled egress.
   `session` / `exec`, `connect add` / `rm` / `ls`), the credentials (`repo add` / `rm` / `ls`,
   `creds ls` / `rotate` / `audit`, deploy keys registered and revoked through `gh`) and the
   backend (`backend prepare` / `status` / `repo`) work today; `test` is a stub that names its
-  milestone. `files/` under it holds everything a role receives on disk, with a manifest;
+  milestone. Two key pairs live in `~/.sandboxed_devenv/secrets/`: the control key for the
+  control machine into every VM, the sandbox key for `gw` into the backends only; every VM's
+  SSH host key is minted into its seed and pinned before boot. `files/` under it holds everything a role receives on disk, with a manifest;
   `versions.yaml` pins every version and `policy.yaml` is the egress policy
 - `AGENTS.md`: conventions and the verification contract for humans and agents
 - `ide_sandboxing.html`: original brainstorming document, kept for history
