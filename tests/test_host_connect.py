@@ -108,30 +108,16 @@ def test_add_ls_rm_write_the_three_files(paths, capsys):
     assert "no connections" in capsys.readouterr().out
 
 
-def test_add_skips_the_gateway_file_while_gateway_runs(paths, monkeypatch, capsys):
+def test_add_and_rm_write_the_gateway_file_while_gateway_runs_and_say_so(paths, monkeypatch, capsys):
     monkeypatch.setattr(host_connect, "gateway_running", lambda paths: True)
-    monkeypatch.setenv("SANDBOXED_DEVENV_COLOR", "always")
     assert cli.main(["connect", "add", "p", "192.168.64.23", KEYS[0]]) == 0
     out = capsys.readouterr().out
-    assert "Gateway is running" in out
-    assert "\033[1;33mconnect add: Gateway is running" in out
-    monkeypatch.delenv("SANDBOXED_DEVENV_COLOR")
-    assert not paths.ssh_configs.exists()
-    assert paths.stanza_file("p").exists()
-    paths.ssh_configs.parent.mkdir(parents=True)
-    paths.ssh_configs.write_text(host_connect.ssh_configs_with(None, "p", "192.168.64.23", "2026.2"))
+    assert "Gateway is running" in out and "click on the window" in out
+    assert host_connect.ssh_configs_entries(paths.ssh_configs.read_text())[0]["host"] == "192.168.64.23"
     assert cli.main(["connect", "rm", "p"]) == 0
     out = capsys.readouterr().out
-    assert "entry not removed" in out
-    assert len(host_connect.ssh_configs_entries(paths.ssh_configs.read_text())) == 1
-
-
-def test_add_force_writes_the_gateway_entry_while_gateway_runs(paths, monkeypatch, capsys):
-    monkeypatch.setattr(host_connect, "gateway_running", lambda paths: True)
-    assert cli.main(["connect", "add", "p", "192.168.64.23", KEYS[0], "--force"]) == 0
-    out = capsys.readouterr().out
-    assert "writing its entry anyway" in out
-    assert host_connect.ssh_configs_entries(paths.ssh_configs.read_text())[0]["host"] == "192.168.64.23"
+    assert "disappears from its dialog" in out
+    assert host_connect.ssh_configs_entries(paths.ssh_configs.read_text()) == []
 
 
 def test_add_needs_a_key(paths, capsys):

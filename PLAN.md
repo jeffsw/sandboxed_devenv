@@ -226,7 +226,7 @@ it is and whether it is rendered:
 | `sandboxed-devenv client start` | client host | What `gw-run` does: the runtime-dir and Wayland socket ACLs, then `client session` as `gw` through sudo |
 | `sandboxed-devenv client session` | client host | As `gw`: the private Xwayland with its cookie, then the Gateway launcher |
 | `sandboxed-devenv client exec -- CMD` | client host | What `gw-exec` does: run a command as `gw` with its display and cookie |
-| `sandboxed-devenv connect add [--force] / rm / ls` | client host | Gateway's `sshConfigs.xml` entry (while Gateway is not running, or with `--force`), the `Host` stanza in `gw`'s `ssh_config`, the pinned key in `known_hosts` |
+| `sandboxed-devenv connect add / rm / ls` | client host | Gateway's `sshConfigs.xml` entry (Gateway reloads it when its window regains focus), the `Host` stanza in `gw`'s `ssh_config`, the pinned key in `known_hosts` |
 | `sandboxed-devenv backend prepare` | backend | First boot of a project's backend: GitHub host keys, git identity, Claude settings, `IdentityAgent none`, then `backend repo add` for each repository listed in `/etc/sandboxed-devenv/project.yaml` |
 | `sandboxed-devenv backend status [--json]` | backend | cloud-init done, IDE backend registered, package version, repositories with their key fingerprints, SSH host public keys |
 | `sandboxed-devenv backend repo add / rm / rekey / ls` | backend | The VM side of `repo`: mint or delete a repository's key pair and alias stanza, clone or keep the checkout, print the public key as JSON |
@@ -564,18 +564,18 @@ Parity with today's rig, then the old scripts go.
       the GitHub half of the M3 gate, met 8 November. Run again with Gateway closed: the
       `sshConfigs.xml` entry written by `new`, the connection listed in Gateway and
       opened, the entry removed by `rm`.
-- [ ] The Gateway entry while Gateway runs. Today `connect add` skips it, since Gateway
-      rewrites `sshConfigs.xml` from memory on exit, and prints what to do instead. To
-      try: the IDE platform reloads application-level option files changed on disk when
-      its window regains focus (StoreReloadManager), so writing the entry and letting the
-      user focus Gateway may be enough; else Gateway's host field can take the project's
-      alias from gw's `ssh_config` (`Host <project>`), which needs no entry at all.
-      `connect add --force` (8 November) writes the entry regardless, for the experiment:
-      with Gateway open on desk, `sandboxed-devenv new` a project, then on desk
-      `sudo sandboxed-devenv connect add PROJECT ADDRESS "HOSTKEY" --force` with the key
-      from `ls --json` (`ssh_host_key` in the inventory record), give Gateway's window
-      focus and look for the connection, then quit Gateway and see whether the entry
-      survived in the file.
+- [x] The Gateway entry while Gateway runs. `connect add` used to skip it, on the
+      assumption that Gateway rewrites `sshConfigs.xml` from memory on exit and would
+      drop an entry written underneath it. Tried on desk on 8 November: with Gateway open,
+      `new` made a backend and `connect add` wrote its entry anyway; after a click on
+      Gateway's window the connection was in its dialog, a session opened and the Client
+      launched with the project; after Gateway and the Client quit, the file still held
+      both entries and the header comment, so Gateway did not rewrite it at all. The IDE
+      platform reloads application-level option files changed on disk when its window
+      regains focus. `connect add` and `connect rm` now write the file whether or not
+      Gateway runs and say that a click on the window makes the change appear; the
+      `--force` flag of the experiment is gone. This closes the Gateway half of the M3
+      gate: `new` needs no manual Gateway step either way.
 - [x] Split the rig key in two. Until 8 November one pair, `secrets/gw_ed25519`, was both
       the control side's login to every VM (desk as `jsw`, backends as `dev`) and gw's key
       to the backends (`/home/gw/.ssh/vm_ed25519`). On the Mac rig desk's `jsw` account
@@ -657,7 +657,8 @@ Parity with today's rig, then the old scripts go.
       side sees a pipe; `NO_COLOR` honoured). Extend it to the other warning-like lines:
       a failed registration or `connect` in `new`, pending revocations in `rm` and `ls`,
       the leftover build VM in `image build`, `resources` announcing a stop, unclaimed
-      keys in `creds audit`.
+      keys in `creds audit`. (The running-Gateway notice itself is a plain note since
+      8 November, when the entry turned out to work under a running Gateway.)
 - [x] Static verification in CI: schema, AppArmor and nftables parsers, shell, Python,
       YAML, workflow, doc rules and Mermaid rendering.
 
@@ -724,7 +725,7 @@ Written before the laptop arrives, first run on it.
 | M0 scaffold | `mise run verify` green with the package installed and one test | CI |
 | M1 client host | `desk` rebuilt from the slim template with the package installed; `sandboxed-devenv host check` 0 FAIL; Gateway via `client start`; preview and clipboard work | Mac |
 | M2 drivers and backend split | `sandboxed-devenv new` to a connected client on the Mac, the package installed in the backend; old scripts deleted. Status 8 November: `new` ready in 17 s with the connection written for gw on desk, gw's SSH to the backend proven, scripts deleted; left: a desk from `client-host new` and the connection opened in Gateway's window | Mac |
-| M3 credentials | `sandboxed-devenv new` and `sandboxed-devenv rm` need no manual GitHub or Gateway step. Met 8 November with Gateway closed during both: `new --repo` registered and cloned, its connection appeared in Gateway's list and worked, `rm` revoked the key and removed the entry. While Gateway runs the entry is not written and the command says so; making it survive a running Gateway is the open M3 item | Mac |
+| M3 credentials | `sandboxed-devenv new` and `sandboxed-devenv rm` need no manual GitHub or Gateway step. Met 8 November: `new --repo` registered and cloned, its connection appeared in Gateway's list and worked, `rm` revoked the key and removed the entry; with Gateway open, the entry appears after a click on its window and survives its exit | Mac |
 | M4 testing | `mise run test-e2e` passes on the Mac unattended, versions matching on all three machines | Mac |
 | M5 Linux laptop | `sandboxed-devenv test end-to-end` passes on the laptop; first real project opened | Linux laptop |
 
