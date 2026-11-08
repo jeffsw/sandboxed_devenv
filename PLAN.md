@@ -211,12 +211,12 @@ it is and whether it is rendered:
 | `sandboxed-devenv resources PROJECT [--cpus N] [--memory-gib N] [--yes]` | control | Shows the backend's CPUs and memory, or changes them. Applied live where the driver can; otherwise the command asks before stopping and starting the backend, and `--yes` answers for scripts. Disk size is future work |
 | `sandboxed-devenv repo add PROJECT OWNER/REPO [--deploy-key-grants-repo-write] [--no-clone]` | control | Mints a key pair for the repository in the VM (`backend repo add`), registers it with `gh repo deploy-key add`, records it in the inventory, clones to `~/proj/PROJECT/REPO` |
 | `sandboxed-devenv repo rm PROJECT OWNER/REPO [--delete-checkout]` | control | Revokes the key on GitHub, then removes it and its alias stanza in the VM; the checkout stays unless asked |
-| `sandboxed-devenv repo ls PROJECT` | control | The project's repositories with key fingerprint, access and age |
+| `sandboxed-devenv repo ls PROJECT [--json]` | control | The project's repositories with key fingerprint, GitHub id, state, access and age |
 | `sandboxed-devenv ssh PROJECT [CMD]` | control | Shell as `dev` in the project's backend with the rig key; with CMD, runs it there. No shell expansion, and the `--help` says so |
 | `sandboxed-devenv serial-console PROJECT` | control | The backend's serial console through the driver (`screen` on UTM's pty, `incus console`), for when SSH is not up |
-| `sandboxed-devenv creds ls [PROJECT]` | control | Every credential, scope, age, where it lives, how it is revoked |
+| `sandboxed-devenv creds ls [PROJECT] [--json]` | control | Every credential, scope, age, where it lives, how it is revoked |
 | `sandboxed-devenv creds rotate PROJECT [--deploy-key [OWNER/REPO]] [--claude-token]` | control | Regenerate inside the VM (`backend repo rekey` for one repository or all), re-register, update the inventory |
-| `sandboxed-devenv creds audit [--fix]` | control | Compares the inventory with `gh repo deploy-key list` on every repository it knows: retries pending revocations, reports keys GitHub holds that no project claims, and with `--fix` deletes them |
+| `sandboxed-devenv creds audit [--fix]` | control | Compares the inventory with GitHub's deploy keys on every repository it knows: retries pending revocations, adopts keys registered by hand, reports keys GitHub holds that no project claims, and with `--fix` deletes those whose title says this tool made them |
 | `sandboxed-devenv test end-to-end` | control | End to end on real VMs, all three roles: builds or reuses the base image, creates a throwaway project, waits for its backend, runs the canary in the client and backend roles, checks SSH from `gw` to the backend and that the IDE backend service is up, compares `--version` across the three machines, then removes everything. Not covered: the interactive path (Gateway, client, preview, clipboard), provisioning the client host (`host install`), and the GitHub deploy-key flow |
 | `sandboxed-devenv test host` | control | Seconds, no VM created: `host install --check` for drift and the canary in the client role on the client host |
 | `sandboxed-devenv test backend PROJECT` | control | Seconds, on an existing backend: `backend status` and the canary in the backend role, for after an upgrade |
@@ -516,33 +516,45 @@ Parity with today's rig, then the old scripts go.
 
 ### M3: credentials
 
-- [ ] `control_inventory.py`: one JSON file per project in
+- [x] `control_inventory.py`: one JSON file per project in
       `~/.sandboxed_devenv/inventory/` with the project name, the backend's VM name,
       driver, image version, package version, created, a `repos` list (owner/repo,
-      checkout path, access, the key's fingerprint and GitHub id, created) and a
-      `credentials` list for everything else; each entry has kind, scope, fingerprint or
-      id, where it lives, created, the revoke action and its state, `active` or
-      `pending-revoke`. The module and the backend side of the record exist since M2
-      (8 November); M3 fills `github_key_id`, the states and `credentials`.
-- [ ] `control_creds.py`: deploy keys, one per repository (`backend repo add` over SSH
-      returns the public key, `gh repo deploy-key add` with `--allow-write` when asked,
-      record the key id; `repo rm` runs `gh repo deploy-key delete` before `backend repo
-      rm`; `rotate` runs `backend repo rekey` and re-registers; a failed GitHub call
-      leaves the entry `pending-revoke`), Claude token (from the
+      checkout path, access, the key's fingerprint, GitHub id and title, created,
+      registered) and a `credentials` list for everything else; each entry has kind,
+      scope, fingerprint or id, where it lives, created, the revoke action and its state,
+      `active` or `pending-revoke`. The module and the backend side of the record came
+      with M2 (8 November); the registration fields, the states and `credentials` with M3
+      (8 November). A record whose backend is gone stays, marked `removed`, while a
+      revocation is pending.
+- [x] `control_creds.py`: deploy keys, one per repository (`backend repo add --no-clone`
+      over SSH returns the public key, the key goes onto GitHub through `gh api` with
+      `read_only` unless write access was asked, which returns the id to record; a second
+      `backend repo add` clones; `repo rm` deletes the key on GitHub before `backend repo
+      rm`; `rotate` runs `backend repo rekey`, revokes the old key and registers the new
+      one; a failed GitHub call leaves the entry `pending-revoke`), Claude token (from the
       secrets dir, hashed fingerprint only in the inventory; no revoke API, so `creds ls`
-      shows age and the runbook says how to rotate at the account), `gw`'s key pair
-      (minted once per host, recorded with its fingerprint), git identity.
-- [ ] `sandboxed-devenv rm` revokes everything listed and runs `connect rm` before
-      deleting the VM; `sandboxed-devenv clone` runs `backend repo rekey` for every
-      repository in the clone and registers the new keys under the clone's name, rather
-      than copying the parent's.
-- [ ] `repo add`, `repo rm` and `repo ls` on the control side, and `creds audit`, which
-      compares the inventory with `gh repo deploy-key list` on every repository it
-      knows: pending revocations retried, unclaimed keys reported, `--fix` deletes them.
-      Keys registered by hand at M2 have no GitHub id in the inventory, only the public
-      key and fingerprint `new` recorded, so the audit adopts a key GitHub holds whose
-      text matches an inventory entry (storing the id and marking it `active`) before
-      calling anything unclaimed.
+      shows age and how to rotate at the account; `rotate --claude-token` rewrites the
+      backend's `project.yaml` through `sudo tee` and reruns `backend prepare`), the rig
+      key pair shown by `creds ls` from the secrets directory. `gh api` rather than
+      `gh repo deploy-key`, since the API answers with the key's id as JSON. Done
+      8 November.
+- [x] `sandboxed-devenv rm` revokes every deploy key and runs `connect rm` before deleting
+      the VM, and keeps the record when a revocation failed; `sandboxed-devenv clone`
+      runs `backend repo rekey` for every repository in the clone and registers the new
+      keys under the clone's name, rather than copying the parent's. `new --repo` fails
+      before making a VM when `gh` is missing or logged out, and a registration that
+      fails after the VM exists leaves the key `unregistered` with the manual commands
+      printed; `repo add` retries it. Done 8 November.
+- [x] `repo add`, `repo rm` and `repo ls` on the control side, and `creds audit`, which
+      compares the inventory with GitHub's deploy keys on every repository it knows:
+      pending revocations retried (and a removed backend's record dropped once clean),
+      keys registered by hand adopted by their text (the id stored, state `active`),
+      keys gone from GitHub marked `unregistered`, unclaimed keys reported, and with
+      `--fix` deleted when their title starts with `sandboxed-devenv ` (keys with any
+      other title, such as a CI deploy key made by hand, are reported and left alone).
+      Done 8 November; unit-tested against a fake GitHub, since the agent's permission
+      classifier declines to register keys itself; the first real `new --repo` and `rm`
+      are the gate.
 - [ ] Split the rig key in two. Today one pair, `secrets/gw_ed25519`, is both the control
       side's login to every VM (desk as `jsw`, backends as `dev`) and gw's key to the
       backends (`/home/gw/.ssh/vm_ed25519`). On the Mac rig desk's `jsw` account authorizes

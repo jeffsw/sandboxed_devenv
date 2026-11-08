@@ -10,8 +10,9 @@ backend, and any AI agent run in per-project VMs with controlled egress.
 - `sandboxed_devenv/`: that package. `mise run sync` builds the venv. The control side
   (`image build`, `client-host new`, `new`, `ls`, `start`, `stop`, `rm`, `clone`, `resources`,
   `ssh`, `serial-console`), the client host (`host install` / `check`, `client start` /
-  `session` / `exec`, `connect add` / `rm` / `ls`) and the backend (`backend prepare` /
-  `status` / `repo`) work today; `repo`, `creds` and `test` are stubs that name their
+  `session` / `exec`, `connect add` / `rm` / `ls`), the credentials (`repo add` / `rm` / `ls`,
+  `creds ls` / `rotate` / `audit`, deploy keys registered and revoked through `gh`) and the
+  backend (`backend prepare` / `status` / `repo`) work today; `test` is a stub that names its
   milestone. `files/` under it holds everything a role receives on disk, with a manifest;
   `versions.yaml` pins every version and `policy.yaml` is the egress policy
 - `AGENTS.md`: conventions and the verification contract for humans and agents
