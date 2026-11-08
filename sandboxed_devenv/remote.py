@@ -11,6 +11,11 @@ first connection is M3's job (`connect add`); until then the file is per VM and 
 ``wait_ready`` are the two waits every VM creation needs: the first login, and
 ``backend status --json`` reporting ``ready``. ``Local`` is the same interface for a client
 host that is this machine (``client_host: local``).
+
+No shell expansion. A command is a list of arguments; ``shlex.join`` quotes every one of them
+for the far side's login shell, so ``~``, ``$HOME`` and globs arrive as the literal characters.
+Paths are given in full (``/tmp/x.whl``, ``/home/dev/...``). ``Local`` keeps the same rule, so
+a caller cannot tell the two apart by what expands.
 """
 
 import dataclasses
@@ -71,7 +76,8 @@ class Remote:
         return retlist
 
     def ssh_command(self, remote_command: list[str] | None = None, tty: bool = False) -> list[str]:
-        """``ssh`` with every option, the target, and the command joined for the remote shell."""
+        """``ssh`` with every option, the target, and the command quoted for the remote shell.
+        No shell expansion."""
         retlist = ["ssh", *self.options(), "-p", str(self.port)]
         if tty:
             retlist.append("-t")
@@ -89,7 +95,8 @@ class Remote:
 
     def run(self, remote_command: list[str], check: bool = True, capture: bool = False,
             timeout: float | None = None, quiet: bool = False) -> subprocess.CompletedProcess:
-        """The command on the far side; ``quiet`` discards its output when nothing is captured."""
+        """The command on the far side; ``quiet`` discards its output when nothing is captured.
+        No shell expansion."""
         kwargs = {}
         if capture:
             kwargs["capture_output"] = True
@@ -201,7 +208,7 @@ class Remote:
 
 @dataclasses.dataclass
 class Local:
-    """The client host when it is this machine: the same calls, run locally."""
+    """The client host when it is this machine: the same calls, run locally. No shell expansion."""
 
     command_path: str = dataclasses.field(default_factory=common.command_path)
     runner: common.Runner = dataclasses.field(default_factory=common.Runner)
@@ -240,7 +247,7 @@ class Local:
         return retval
 
     def push(self, sources: list[pathlib.Path], remote_path: str) -> None:
-        dest = pathlib.Path(remote_path).expanduser()
+        dest = pathlib.Path(remote_path)
         for source in sources:
             if self.runner.dry_run:
                 print(f"would copy {source} to {dest}")

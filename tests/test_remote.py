@@ -60,6 +60,15 @@ def test_ssh_command_without_a_command_and_with_a_tty():
     assert command[command.index("-p") + 1] == "2222"
 
 
+def test_remote_command_is_quoted_so_the_far_shell_expands_nothing(tmp_path):
+    command = make_remote().ssh_command(["ls", "~/proj", "$HOME", "*.whl"])
+    assert command[-1] == "ls '~/proj' '$HOME' '*.whl'"
+    # Local follows the same rule: a `~` in a destination is a directory called `~`, not a home.
+    local = remote.Local(command_path="/x", runner=FakeRunner())
+    with pytest.raises(FileNotFoundError):
+        local.push([tmp_path / "missing.whl"], str(tmp_path / "~" / "x.whl"))
+
+
 def test_scp_command():
     command = make_remote().scp_command([pathlib.Path("/b/x.whl")], "~/x.whl")
     assert command[:2] == ["scp", "-q"]

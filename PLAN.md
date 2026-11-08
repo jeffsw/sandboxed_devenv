@@ -203,7 +203,7 @@ it is and whether it is rendered:
 | `sandboxed-devenv repo add PROJECT OWNER/REPO [--deploy-key-grants-repo-write] [--no-clone]` | control | Mints a key pair for the repository in the VM (`backend repo add`), registers it with `gh repo deploy-key add`, records it in the inventory, clones to `~/proj/PROJECT/REPO` |
 | `sandboxed-devenv repo rm PROJECT OWNER/REPO [--delete-checkout]` | control | Revokes the key on GitHub, then removes it and its alias stanza in the VM; the checkout stays unless asked |
 | `sandboxed-devenv repo ls PROJECT` | control | The project's repositories with key fingerprint, access and age |
-| `sandboxed-devenv ssh PROJECT [CMD]` | control | Shell as `dev` in the project's backend with the rig key |
+| `sandboxed-devenv ssh PROJECT [CMD]` | control | Shell as `dev` in the project's backend with the rig key; with CMD, runs it there. No shell expansion, and the `--help` says so |
 | `sandboxed-devenv serial-console PROJECT` | control | The backend's serial console through the driver (`screen` on UTM's pty, `incus console`), for when SSH is not up |
 | `sandboxed-devenv creds ls [PROJECT]` | control | Every credential, scope, age, where it lives, how it is revoked |
 | `sandboxed-devenv creds rotate PROJECT [--deploy-key [OWNER/REPO]] [--claude-token]` | control | Regenerate inside the VM (`backend repo rekey` for one repository or all), re-register, update the inventory |
@@ -348,7 +348,9 @@ Parity with today's rig, then the old scripts go.
       changes refused; M3 pins keys before the first connection); `tool(args,
       parse_json=True)` runs `sandboxed-devenv` there and parses `--json`, `push`,
       `install_wheel` (to `/tmp` by an explicit path: the far shell gets the command
-      quoted, so `~` would never expand, found on the first image build), `wait_for_ssh`,
+      quoted, so `~` would never expand, found on the first image build; the module
+      states the rule as "No shell expansion", and every `--help` that takes a remote
+      command repeats it), `wait_for_ssh`,
       `wait_for_cloud_init`, `wait_ready`. `Local` is the same interface for `client_host:
       local`. Done 8 November.
 - [x] `control_driver_utm.py`: `create-vms.sh` and `make-seed.sh` ported: hdiutil seed
