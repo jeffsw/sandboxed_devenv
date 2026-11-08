@@ -193,7 +193,7 @@ it is and whether it is rendered:
 | `sandboxed-devenv doctor` | any | Which roles this machine can play, driver and tool versions, what `~/.sandboxed_devenv/` holds, the version on each client host and backend it can reach |
 | `sandboxed-devenv render [--out DIR]` | any | Renders every artifact (cloud-inits, nftables, AppArmor, ssh configs) and builds the wheel, without touching a VM. CI's entry point |
 | `sandboxed-devenv canary --role ROLE [--json]` | any | The probes for the client or backend role, run locally |
-| `sandboxed-devenv image build [--force]` | control | Downloads the Ubuntu cloud image, boots it with the base cloud-init (which installs the package), waits, runs `cloud-init clean`, powers off, registers the base image |
+| `sandboxed-devenv image build [--force] [--wheel PATH] [--cpus N] [--memory-gib N]` | control | Downloads the Ubuntu cloud image (checked against its SHA256SUMS), boots it once with the base cloud-init, waits for SSH and cloud-init, pushes and installs the wheel (built from the checkout unless `--wheel` names one), runs `backend prepare --stage image`, `cloud-init clean`, powers off, keeps the disk as the base image with a record of what went in. Skips the build when nothing changed; `--force` rebuilds |
 | `sandboxed-devenv image ls / rm` | control | Base images and their versions |
 | `sandboxed-devenv new PROJECT [--repo OWNER/REPO]... [--disposable] [--deploy-key-grants-repo-write] [--cpus N] [--memory-gib N]` | control | Launches the backend for PROJECT from the base image with its own cloud-init, waits for `backend status` to report ready, runs `repo add` for each `--repo`, pins the host key, runs `connect add` on the client host, records everything in the inventory. `--repo` is optional and repeatable; repositories can be added later. `--disposable` marks the backend for stranger code, used once and destroyed (summary 4.7): `ls` flags it and `rm` takes no snapshot. `--deploy-key-grants-repo-write` applies to every `--repo` given and registers its key with write access (`gh repo deploy-key add --allow-write`) so the VM can push; the default key is read-only. `--cpus` and `--memory-gib` override the defaults in `config.yaml` (4 and 8) |
 | `sandboxed-devenv ls` | control | Projects with their backend's state, address, CPUs and memory, repositories, package version, credential ages |
@@ -203,7 +203,7 @@ it is and whether it is rendered:
 | `sandboxed-devenv repo add PROJECT OWNER/REPO [--deploy-key-grants-repo-write] [--no-clone]` | control | Mints a key pair for the repository in the VM (`backend repo add`), registers it with `gh repo deploy-key add`, records it in the inventory, clones to `~/proj/PROJECT/REPO` |
 | `sandboxed-devenv repo rm PROJECT OWNER/REPO [--delete-checkout]` | control | Revokes the key on GitHub, then removes it and its alias stanza in the VM; the checkout stays unless asked |
 | `sandboxed-devenv repo ls PROJECT` | control | The project's repositories with key fingerprint, access and age |
-| `sandboxed-devenv ssh PROJECT [CMD]` | control | Shell as `dev` in the project's backend with the rig key |
+| `sandboxed-devenv ssh PROJECT [CMD]` | control | Shell as `dev` in the project's backend with the rig key; with CMD, runs it there. No shell expansion, and the `--help` says so |
 | `sandboxed-devenv serial-console PROJECT` | control | The backend's serial console through the driver (`screen` on UTM's pty, `incus console`), for when SSH is not up |
 | `sandboxed-devenv creds ls [PROJECT]` | control | Every credential, scope, age, where it lives, how it is revoked |
 | `sandboxed-devenv creds rotate PROJECT [--deploy-key [OWNER/REPO]] [--claude-token]` | control | Regenerate inside the VM (`backend repo rekey` for one repository or all), re-register, update the inventory |
@@ -334,26 +334,42 @@ inside `desk`.
 
 Parity with today's rig, then the old scripts go.
 
-- [ ] `control_driver.py`: a `Driver` protocol with `create(name, image, cpus,
-      memory, seed)`, `start`, `stop`, `delete`, `clone`, `list`, `address(name)`,
-      `console(name)`, and `deliver_seed(name, dir)` because UTM wants an ISO attached as
-      a drive and Incus wants config keys.
-- [ ] `remote.py`: run `sandboxed-devenv ...` on the client host (locally when
-      `client_host: local`, else over SSH) and on a backend (over SSH as `dev` with
-      the rig key), returning parsed `--json` output; `push(path)` copies a file the
-      same way, and `install_wheel(path)` pushes and runs `sudo pipx install --global`.
-      `wait_ready(name)` polls `backend status --json` through it.
-- [ ] `control_driver_utm.py`: port `create-vms.sh` (AppleScript create, plutil for
-      keyboard, pointer and clipboard, the UTM relaunch) and `make-seed.sh` (hdiutil
-      ISO). Keep the documented UTM 4.7.5 quirks as comments with dates.
+- [x] `control_driver.py`: a `Driver` protocol with `create(spec)`, `start`, `stop`,
+      `delete`, `clone`, `list`, `state`, `address(name)`, `console_command(name)`,
+      `export_disk(name, dest)` and `set_resources`. The seed travels with `create`
+      (a `VmSpec` with the disk, CPUs, memory and the seed directory): UTM imports drives
+      only when the VM is made and Incus takes the documents as config keys at `init`, so
+      the separate `deliver_seed` first planned was dropped; a VM that needs a new seed is
+      recreated. `address` is None on UTM, whose Apple backend has no guest agent for
+      Linux, and the seed's static address is what the inventory records. Done 8 November.
+- [x] `remote.py`: `Remote` runs a command on one machine as one user with the rig key
+      and nothing else (`ssh -F none`, no agent, `BatchMode`, one known_hosts file per
+      machine under `~/.sandboxed_devenv/known_hosts/`, first key accepted and later
+      changes refused; M3 pins keys before the first connection); `tool(args,
+      parse_json=True)` runs `sandboxed-devenv` there and parses `--json`, `push`,
+      `install_wheel` (to `/tmp` by an explicit path: the far shell gets the command
+      quoted, so `~` would never expand, found on the first image build; the module
+      states the rule as "No shell expansion", and every `--help` that takes a remote
+      command repeats it), `wait_for_ssh`,
+      `wait_for_cloud_init`, `wait_ready`. `Local` is the same interface for `client_host:
+      local`. Done 8 November.
+- [x] `control_driver_utm.py`: `create-vms.sh` and `make-seed.sh` ported: hdiutil seed
+      ISO, AppleScript `make new virtual machine` with both drives imported, `utmctl`
+      for start, stop, delete, clone, list and status, the serial port's pty for the
+      console, `cp -c` (APFS clone) to take a disk out of a bundle, `update
+      configuration` for resources (to verify with `resources`), plutil and the UTM
+      relaunch for a VM with a display. The dated 4.7.5 quirks are the module docstring.
+      Done 8 November.
 - [x] `versions.yaml`: Gateway, IDE backend, client build, Ubuntu release and image
       serial, architecture-specific download URLs keyed by `aarch64` and `x86_64`.
       `render.py` reads it; nothing else carries a version string.
 - [x] `config.yaml` model in `config.py`: `client_host`, `vm_name_prefix`, backend
       defaults (`cpus: 4`, `memory_gib: 8`, `disk_gib: 32`), and the UTM address pool
-      (`192.168.64.20` upward; `.1` is the Mac, `.10` is `desk`), and `incus_storage_dir`,
-      the directory of the Incus `dir` pool (default: Incus's own). Each backend's
-      address, CPUs and memory are recorded in the inventory when it is created.
+      (`192.168.64.20` upward; `.1` is the Mac, `.10` is `desk`; `.19` is the base
+      image's one boot under `image build`, `utm.image_build_address`), and
+      `incus_storage_dir`, the directory of the Incus `dir` pool (default: Incus's own).
+      Each backend's address, CPUs and memory are recorded in the inventory when it is
+      created.
 - [x] Split `rehearsal/utm/backend/user-data.tmpl` into
       `files/backend/cloudinit-image__user-data.yaml.tmpl` (packages including `pipx`,
       `gh` apt source, IDE tarball and `registerBackendLocationForGateway`, plugin
@@ -377,12 +393,24 @@ Parity with today's rig, then the old scripts go.
       state, the IDE backend registration, the package version, the repositories with
       their key fingerprints and the SSH host public keys; `backend repo add / rm / rekey
       / ls` as described under "Projects and repositories".
-- [ ] `sandboxed-devenv image build`: grow the cloud image to `disk_gib` (sparse on APFS;
+- [x] `sandboxed-devenv image build`: grow the cloud image to `disk_gib` (sparse on APFS;
       the filesystem fills it at first boot), boot it with the base cloud-init, wait for
       SSH, push and install the wheel, run `backend prepare --stage image`, then
-      `cloud-init clean --logs` and power off; on UTM the raw disk is kept as
-      `~/.sandboxed_devenv/images/backend-<version>.img`, on Incus `incus publish` makes
-      an image alias. Rebuilding is forced by a version change or `--force`.
+      `cloud-init clean --logs --machine-id --configs network` and power off; on UTM the
+      raw disk is kept as `~/.sandboxed_devenv/images/backend-<package version>.img` with
+      `backend-<package version>.yaml` beside it (driver, architecture, package, IDE
+      backend and Ubuntu versions, a digest of the rendered image cloud-init, size, build
+      time), on Incus `incus publish` makes an image alias (M5). Rebuilding happens when
+      any recorded input differs or with `--force`; otherwise the command says the image
+      is up to date and exits 0. The build VM is `<vm_name_prefix>image-build` at
+      `utm.image_build_address`; it is deleted on success and left for inspection on
+      failure, and the next run removes it. The Ubuntu download is checked against the
+      release's `SHA256SUMS`. Built on the Mac on 8 November: 103 s end to end (SSH after
+      11 s, cloud-init 74 s, pipx 6 s, prepare 4 changed 0 failed, power off 2 s, APFS
+      clone out of the bundle 0 s), 8.8 GiB allocated of 32 GiB. Two things the first
+      run taught: the `~` in a remote path is never expanded because the command reaches
+      the far shell quoted, and the IDE registration signal is the `userProvidedDist`
+      symlink in `dev`'s cache, not the daemon's database.
 - [ ] `sandboxed-devenv new`, `ls`, `start`, `stop`, `rm`, `clone`, `ssh`,
       `serial-console` working on the Mac with the UTM driver: `new` copies the base
       image (an APFS clone, instant and block-sharing) and creates the VM through
@@ -393,7 +421,8 @@ Parity with today's rig, then the old scripts go.
       image, or waiting for a first boot, `new`, `clone` and `image build` print what
       they are doing and why it takes time (for a copy: the size and whether the
       filesystem shares blocks), then the elapsed time when the step ends. The Incus
-      driver passes through Incus's own progress for copies.
+      driver passes through Incus's own progress for copies. `common.slow_step()` does
+      this for `image build` (8 November); `new` and `clone` follow.
 - [ ] Routing on `desk` for several backends: the desk template carries two `/25` routes
       via the Mac, more specific than the on-link `/24`, so every backend is reachable
       without a per-backend change. Verified as part of the gate; the fallback is a `/32`

@@ -42,9 +42,11 @@ SSH_HOST_KEY_GLOB = "ssh_host_*_key.pub"
 GITHUB_META_URL = "https://api.github.com/meta"
 IDE_DIR = pathlib.Path("/opt/jetbrains/idea")
 IDE_PRODUCT_INFO = IDE_DIR / "product-info.json"
-# What registerBackendLocationForGateway leaves behind on 2026.2 (read on the rig's backend,
-# 7 November 2026): the JetBrains daemon's database names the IDE path.
-IDE_REGISTRATION = DEV_HOME / ".local" / "share" / "JetBrains" / "Daemon" / "data" / "rhizome" / "db.json"
+# What registerBackendLocationForGateway leaves behind on 2026.2: a symlink to the IDE directory
+# under this directory, which Gateway's CustomInstallPathHelper reads at connection time (idea.log
+# on the first image build, 8 November 2026). The daemon's rhizome database, used as the signal
+# before, appears only after Gateway has connected once, so a fresh image never had it.
+IDE_REGISTRATION = DEV_HOME / ".cache" / "JetBrains" / "RemoteDev" / "userProvidedDist"
 GIT_SETTINGS = ("user.name", "user.email", "init.defaultBranch")
 REPOSITORY_COMMENT = "# repository: "
 
@@ -412,9 +414,22 @@ def ide_backend_report() -> dict:
             info = {"name": data.get("name"), "version": data.get("version"), "build": data.get("buildNumber")}
         except json.JSONDecodeError:
             info = {"name": None, "version": None, "build": None}
-    registration = read_text(IDE_REGISTRATION) or ""
-    retdict = {"installed": info, "registered": str(IDE_DIR) in registration}
+    retdict = {"installed": info, "registered": ide_registered()}
     return retdict
+
+
+def ide_registered(registration_dir: pathlib.Path = IDE_REGISTRATION, ide_dir: pathlib.Path = IDE_DIR) -> bool:
+    """True when a link under the registration directory points at the IDE directory."""
+    retval = False
+    if registration_dir.is_dir():
+        for entry in registration_dir.iterdir():
+            try:
+                if entry.is_symlink() and entry.resolve() == ide_dir.resolve():
+                    retval = True
+                    break
+            except OSError:
+                pass
+    return retval
 
 
 def image_marker_content() -> dict:

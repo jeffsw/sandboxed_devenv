@@ -7,6 +7,7 @@ import sys
 from sandboxed_devenv import common, config
 
 DRIVER_COMMANDS = {"utm": "utmctl", "incus": "incus"}
+DISK_TOOLS = ("qemu-img", "hdiutil")
 CLIENT_SANDBOX_USER = "gw"
 
 
@@ -49,6 +50,13 @@ def cmd_doctor(args) -> int:
     for driver, path in found.items():
         driver_parts.append(f"{driver}: {path or 'not found'}")
     lines.append("drivers: " + "; ".join(driver_parts))
+    if platform.system() == "Darwin":
+        # The UTM driver's helpers: qemu-img converts the QCOW2 cloud image to the raw disk the Apple
+        # backend takes (brew install qemu); hdiutil writes the seed ISO and ships with macOS.
+        tool_parts = []
+        for command in DISK_TOOLS:
+            tool_parts.append(f"{command}: {shutil.which(command) or 'not found'}")
+        lines.append("disk tools: " + "; ".join(tool_parts))
 
     usable = [driver for driver, path in found.items() if path]
     if usable:

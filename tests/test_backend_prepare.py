@@ -113,3 +113,15 @@ def test_status_and_project_name_without_reading_the_token_file(backend_markers,
     assert report["project"]["name"] == "p"
     assert report["project"]["repositories"] == ["jeffsw/a"]
     assert "secret" not in json.dumps(report)
+
+
+def test_ide_registration_is_a_link_to_the_ide_directory(tmp_path):
+    ide_dir = tmp_path / "opt" / "jetbrains" / "idea"
+    ide_dir.mkdir(parents=True)
+    registration = tmp_path / "userProvidedDist"
+    assert backend_prepare.ide_registered(registration, ide_dir) is False
+    registration.mkdir()
+    (registration / "other").symlink_to(tmp_path / "opt")
+    assert backend_prepare.ide_registered(registration, ide_dir) is False
+    (registration / "idea").symlink_to(ide_dir)
+    assert backend_prepare.ide_registered(registration, ide_dir) is True
