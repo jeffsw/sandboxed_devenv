@@ -720,7 +720,13 @@ Written before the laptop arrives, first run on it.
       before anything minted the key pairs on a machine that is its own control side, so it
       mints them now; without `uv` the wheel builds with `pipx run build`, since the
       checkout's own `build/` directory shadows the `build` module; and `new` needs a git
-      identity, from `config.yaml` or the global git config.
+      identity, from `config.yaml` or the global git config. Two more from the evening: a
+      wheel built straight from the tree carried a template removed weeks earlier, out of
+      setuptools' stale `build/lib` under the checkout, so the wheel now comes from an sdist
+      (the default of `uv build` and `python -m build`); and a dry run of `new` or `clone`
+      read nothing from Incus and failed on the bridge address, so queries (`incus list`,
+      the bridge's address, `utmctl list` and `status`, a plist read) now run under
+      `--dry-run` too, since they change nothing.
 - [ ] Host nftables from `policy.yaml` covering both halves: the `gw` uid for the client
       and the forward chain on the Incus bridge for the VMs. Incus network ACLs are the
       alternative if the bridge rules fight with Incus's own firewall management; decide

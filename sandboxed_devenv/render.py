@@ -396,13 +396,16 @@ def wheel_build_command(out_dir: pathlib.Path) -> list[str]:
     pipx's own cache without root (the laptop, where the package is a global pipx install whose
     venv has no `build`); else the `build` package in this interpreter, isolated from the current
     directory, since a checkout's own `build/` output directory shadows the module otherwise
-    (seen on the laptop, 8 November 2026)."""
+    (seen on the laptop, 8 November 2026). Each builds the sdist first and the wheel from it,
+    their default: a wheel built straight from the tree (`--wheel`) takes whatever setuptools
+    left under `build/lib` from earlier builds, and a template removed from the repository
+    rode into the laptop's wheel that way (8 November 2026)."""
     if shutil.which("uv"):
-        retval = ["uv", "build", "--wheel", "--out-dir", str(out_dir)]
+        retval = ["uv", "build", "--out-dir", str(out_dir)]
     elif shutil.which("pipx"):
-        retval = ["pipx", "run", "build", "--wheel", "--outdir", str(out_dir)]
+        retval = ["pipx", "run", "build", "--outdir", str(out_dir)]
     else:
-        retval = [sys.executable, "-I", "-m", "build", "--wheel", "--outdir", str(out_dir)]
+        retval = [sys.executable, "-I", "-m", "build", "--outdir", str(out_dir)]
     return retval
 
 
