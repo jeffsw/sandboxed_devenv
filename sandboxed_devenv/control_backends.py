@@ -315,8 +315,10 @@ def stop_vm(driver: control_driver.Driver, vm: str, command: str, force: bool = 
         driver.stop(vm, force=True)
         control_driver.wait_for_state(driver, vm, control_driver.STOPPED, FORCE_STOP_TIMEOUT)
         return
-    driver.stop(vm, force=False)
-    with common.slow_step(command, "stop", f"asked {vm} to shut down; waiting for it to stop"):
+    with common.slow_step(command, "stop", f"asking {vm} to shut down and waiting for it to stop"):
+        # Inside the timer: `incus stop` returns only once the guest is down, so the request is
+        # most of the time there, where `utmctl stop` returns at once and the wait is.
+        driver.stop(vm, force=False)
         try:
             control_driver.wait_for_state(driver, vm, control_driver.STOPPED, STOP_TIMEOUT)
         except DriverError:
