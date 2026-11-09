@@ -1,5 +1,6 @@
 """`new`, `ls`, `start`, `stop`, `rm`, `clone`, `resources`, `ssh`, `serial-console` against the fakes in conftest."""
 
+import base64
 import json
 import subprocess
 
@@ -205,6 +206,9 @@ def test_clone_stops_copies_rekeys_registers_and_marks_disposable(rig, capsys):
     assert cli.main(["--dry-run", "clone", "p", "q"]) == 0
     out = capsys.readouterr().out
     assert "would stop idesbx-p (started)" in out
+    assert "an APFS clone" in out and "would publish" not in out
+    assert "would move the copy's /home/dev/proj/p to /home/dev/proj/q at first boot" in out
+    assert "the checkouts come with the copy" in out and "clone it in the backend" not in out
     assert "fresh key pair" in out and "q's name" in out
     assert cli.main(["clone", "p", "q"]) == 1
     assert "refusing without --yes" in capsys.readouterr().err
@@ -232,6 +236,12 @@ def test_clone_stops_copies_rekeys_registers_and_marks_disposable(rig, capsys):
     clone_backend = rig["backends"]["192.168.64.21"]
     assert ("tool", ("backend", "repo", "rekey", "jeffsw/a")) in clone_backend.calls
     assert ("tool", ("backend", "repo", "add", "jeffsw/a")) in clone_backend.calls
+    assert "jeffsw/a: checkout kept at /home/dev/proj/q/a" in out and "cloned to" not in out
+    assert record.repos[0].checkout == "/home/dev/proj/q/a"
+    user_data = yaml.safe_load(driver.seeds["idesbx-q"]["user-data"])
+    for entry in user_data["write_files"]:
+        if entry["path"] == str(config.BACKEND_PROJECT_CONFIG):
+            assert yaml.safe_load(base64.b64decode(entry["content"]))["cloned_from"] == "p"
     assert "disposable copy of p with 1 fresh deploy keys" in out
     assert cli.main(["ls"]) == 0
     assert "disposable from p" in capsys.readouterr().out

@@ -130,8 +130,9 @@ sandboxed-devenv test end-to-end          # `mise run test-e2e` from a checkout 
 In Gateway, started by `sandboxed-devenv client start` in the GNOME session, the project's
 connection is listed and `/home/dev/proj/PROJECT` opens. Confirmed on the same machine:
 `incus init` from the alias (a backend ready in 49 s, 34 s of it the init), `resources`
-changing CPUs and memory on the running VM, and `clone` through a temporary published image,
-since `incus copy` of a VM on a `dir` pool failed in the `dd` it runs with direct I/O. Still to
+changing CPUs and memory on the running VM, and `clone` through a temporary published image
+(4 min 26 s, the publish most of it), since `incus copy` of a VM on a `dir` pool failed in the
+`dd` it runs with direct I/O. Still to
 confirm: the egress ruleset on the bridge once `enforce` is on. Record the timings in the
 summary (step 6 of 4.9).
 

@@ -1,5 +1,6 @@
 """`backend repo`'s files in a temporary home, and the status report's shape off a backend."""
 
+import dataclasses
 import grp
 import json
 import os
@@ -138,3 +139,33 @@ def test_project_dir_is_made_at_first_boot(paths):
     assert oct((paths.proj_dir / "p").stat().st_mode & 0o777) == "0o755"
     assert [result.status for result in backend_prepare.step_project_dir(ctx)] == [steps.UNCHANGED]
     assert backend_prepare.step_project_dir in backend_prepare.PROJECT_STEPS
+
+
+def test_a_copy_moves_the_source_projects_directory_and_keeps_its_checkouts(paths):
+    from sandboxed_devenv import config, steps
+
+    identity = config.GitIdentity(user_name="D", user_email="d@example.invalid")
+    copy = config.ProjectConfig(project="q", git=identity, cloned_from="p")
+    ctx = backend_prepare.Context(apply=True, values={}, command="backend prepare", stage="project", project=copy, paths=paths)
+    (paths.proj_dir / "p" / "a").mkdir(parents=True)
+    (paths.proj_dir / "p" / "a" / "work.txt").write_text("uncommitted")
+    moved = backend_prepare.step_inherited_project_dir(ctx)
+    assert [result.status for result in moved] == [steps.CHANGED]
+    assert "moved from" in moved[0].detail
+    assert (paths.proj_dir / "q" / "a" / "work.txt").read_text() == "uncommitted"
+    assert not (paths.proj_dir / "p").exists()
+    again = backend_prepare.step_inherited_project_dir(ctx)
+    assert [(result.status, result.detail) for result in again] == [(steps.UNCHANGED, "present")]
+    assert [result.status for result in backend_prepare.step_project_dir(ctx)] == [steps.UNCHANGED]
+    kept = backend_prepare.add_repository(paths, "jeffsw/a", "q", clone=True, hostname="vm")
+    assert kept["cloned"] is False
+    assert kept["checkout"] == str(paths.proj_dir / "q" / "a")
+    # Not a copy: nothing to do. Both directories present: left alone.
+    plain = config.ProjectConfig(project="q", git=identity)
+    assert backend_prepare.step_inherited_project_dir(dataclasses.replace(ctx, project=plain)) == []
+    (paths.proj_dir / "p").mkdir()
+    both = backend_prepare.step_inherited_project_dir(ctx)
+    assert both[0].status == steps.UNCHANGED and "left alone" in both[0].detail
+    assert (paths.proj_dir / "p").is_dir() and (paths.proj_dir / "q").is_dir()
+    plan = backend_prepare.PROJECT_STEPS
+    assert plan.index(backend_prepare.step_inherited_project_dir) < plan.index(backend_prepare.step_project_dir)

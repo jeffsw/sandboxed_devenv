@@ -402,7 +402,9 @@ def new_plan_lines(record: ProjectRecord, project: config.ProjectConfig, image: 
         f"would run `connect add {record.project} {record.address} HOSTKEY` on the client host ({user_config.client_host})",
         f"would record it in {control_inventory.record_path(record.project)}",
     ]
-    if project.repositories:
+    if project.repositories and project.cloned_from:
+        retlist.append("would register each repository's fresh deploy key on GitHub (gh api); the checkouts come with the copy")
+    elif project.repositories:
         retlist.append("would register each repository's minted deploy key on GitHub (gh api) and clone it in the backend")
     return retlist
 
@@ -671,16 +673,21 @@ def clone(args) -> int:
     token, token_source = control_creds.claude_token(user_config, args.new_project, disposable=True)
     project = config.ProjectConfig(
         project=args.new_project, repositories=[config.Repository(name=r.name, access=r.access) for r in source.repos],
-        git=identity, claude_oauth_token=token, created=control_inventory.now())
+        git=identity, claude_oauth_token=token, created=control_inventory.now(), cloned_from=args.project)
     address = control_inventory.allocate_address(driver.address_pool(user_config))
     record = new_record(user_config, driver.name, image, args.new_project, address, source.cpus, source.memory_gib,
                         disposable=True, cloned_from=args.project)
     state = vm_state(driver, source.vm_name)
     if args.dry_run:
         print(f"would stop {source.vm_name} ({state}) for a consistent copy, if it is running, and start it again after")
-        print(f"would copy {source.vm_name}'s disk out of its bundle (an APFS clone) and launch {new_vm} from it")
+        if driver.name == "utm":
+            print(f"would copy {source.vm_name}'s disk out of its bundle (an APFS clone) and launch {new_vm} from it")
+        else:
+            print(f"would publish {source.vm_name} as a temporary image, launch {new_vm} from it and delete the image")
         for line in new_plan_lines(record, project, image, user_config)[1:]:
             print(line)
+        print(f"would move the copy's /home/dev/proj/{args.project} to /home/dev/proj/{args.new_project} at first boot, "
+              "working trees and all (`backend prepare`), so nothing is cloned again")
         print("would give every repository in the copy a fresh key pair (`backend repo rekey`), registered under "
               f"{args.new_project}'s name")
         retval = 0

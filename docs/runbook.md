@@ -66,7 +66,7 @@ sandboxed-devenv start PROJECT
 sandboxed-devenv resources PROJECT --cpus 6 --memory-gib 12   # stops and starts the backend, asks first
 sandboxed-devenv repo add PROJECT OWNER/REPO                  # another repository, key registered and cloned
 sandboxed-devenv repo rm PROJECT OWNER/REPO [--delete-checkout]
-sandboxed-devenv clone PROJECT SCRATCH     # a disposable copy with fresh deploy keys
+sandboxed-devenv clone PROJECT SCRATCH     # a disposable copy, working trees and all, with fresh deploy keys
 ```
 
 ## Dispose

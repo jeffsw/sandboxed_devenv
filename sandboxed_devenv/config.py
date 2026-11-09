@@ -292,6 +292,9 @@ class ProjectConfig(pydantic.BaseModel):
     git: GitIdentity
     claude_oauth_token: str | None = None
     created: datetime.datetime | None = None
+    # The project this backend was copied from (`sandboxed-devenv clone`): its directory under
+    # ~dev/proj moves to this project's name at first boot, working trees and all.
+    cloned_from: str | None = pydantic.Field(default=None, pattern=PROJECT_NAME_PATTERN)
 
     def to_yaml(self) -> str:
         retval = yaml.safe_dump(self.model_dump(mode="json", exclude_none=True), sort_keys=False)

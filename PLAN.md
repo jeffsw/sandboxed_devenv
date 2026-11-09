@@ -209,7 +209,7 @@ it is and whether it is rendered:
 | `sandboxed-devenv new PROJECT [--repo OWNER/REPO]... [--disposable] [--deploy-key-grants-repo-write] [--cpus N] [--memory-gib N]` | control | Launches the backend for PROJECT from the base image with its own cloud-init, waits for `backend status` to report ready, runs `repo add` for each `--repo`, pins the host key, runs `connect add` on the client host, records everything in the inventory. `--repo` is optional and repeatable; repositories can be added later. `--disposable` marks the backend for stranger code, used once and destroyed (summary 4.7): `ls` flags it and `rm` takes no snapshot. `--deploy-key-grants-repo-write` applies to every `--repo` given and registers its key with write access (`gh repo deploy-key add --allow-write`) so the VM can push; the default key is read-only. `--cpus` and `--memory-gib` override the defaults in `config.yaml` (4 and 8) |
 | `sandboxed-devenv ls [--json]` | control | Projects with their backend's state, address, CPUs and memory, repositories, package version, credential ages |
 | `sandboxed-devenv start / stop [--force] / rm [--yes] PROJECT` | control | Lifecycle of the project's backend. `stop` asks the guest to shut down and waits, forcing it after a timeout or with `--force`. `rm` asks first (`--yes` for scripts), revokes every credential the inventory lists (M3), runs `connect rm` on the client host, then deletes the VM and the inventory record |
-| `sandboxed-devenv clone PROJECT NEW_PROJECT [--yes]` | control | A disposable backend for NEW_PROJECT copied from PROJECT's disk (the source is stopped for a consistent copy, with a question first, and started again after); the copy boots with its own seed and instance id, so hostname, address, host keys and project.yaml are its own, and every repository in it gets a fresh key pair through `backend repo rekey`, registered under the new project's name (M3) |
+| `sandboxed-devenv clone PROJECT NEW_PROJECT [--yes]` | control | A disposable backend for NEW_PROJECT copied from PROJECT's disk (the source is stopped for a consistent copy, with a question first, and started again after); the copy boots with its own seed and instance id, so hostname, address, host keys and project.yaml are its own, and every repository in it gets a fresh key pair through `backend repo rekey`, registered under the new project's name (M3); the copy's `/home/dev/proj/PROJECT` moves to `/home/dev/proj/NEW_PROJECT` at first boot, working trees and all, so nothing is cloned again |
 | `sandboxed-devenv resources PROJECT [--cpus N] [--memory-gib N] [--yes]` | control | Shows the backend's CPUs and memory, or changes them. Applied live where the driver can; otherwise the command asks before stopping and starting the backend, and `--yes` answers for scripts. Disk size is future work |
 | `sandboxed-devenv repo add PROJECT OWNER/REPO [--deploy-key-grants-repo-write] [--no-clone]` | control | Mints a key pair for the repository in the VM (`backend repo add`), registers it with `gh repo deploy-key add`, records it in the inventory, clones to `~/proj/PROJECT/REPO` |
 | `sandboxed-devenv repo rm PROJECT OWNER/REPO [--delete-checkout]` | control | Revokes the key on GitHub, then removes it and its alias stanza in the VM; the checkout stays unless asked |
@@ -711,7 +711,12 @@ Written before the laptop arrives, first run on it.
       in the `dd` Incus 6.0.5 runs with direct I/O (ext4 over LUKS; the disk is a 512-aligned
       32 GiB file, so not an alignment problem), and the copy would carry the source's
       static lease; `clone` goes through a temporary published image instead, the path
-      `image build` proved. Three other things the first day taught: `host install` runs
+      `image build` proved, and ran that way the same evening: 4 min 26 s (the publish 4 min
+      6 s of it), the copy up with its own hostname, lease, pinned host key and a fresh deploy
+      key. That run also showed the copy carrying the source project's directory while `repo
+      add` cloned a second checkout under the new name, so the copy's directory now moves to
+      the new project's name at first boot and the checkout is kept (`cloned_from` in
+      project.yaml). Three other things the first day taught: `host install` runs
       before anything minted the key pairs on a machine that is its own control side, so it
       mints them now; without `uv` the wheel builds with `pipx run build`, since the
       checkout's own `build/` directory shadows the `build` module; and `new` needs a git

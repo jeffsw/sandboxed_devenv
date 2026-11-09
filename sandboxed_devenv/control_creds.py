@@ -274,10 +274,18 @@ def revoke_key(github: GitHub, repository: RepositoryRecord) -> tuple[bool, str]
 
 
 def clone_in_backend(backend, repository: RepositoryRecord) -> str:
-    """`backend repo add OWNER/REPO` inside the backend, which clones once the key is registered."""
+    """`backend repo add OWNER/REPO` inside the backend, which clones once the key is registered,
+    or keeps the checkout a copy brought with it."""
     result = backend.tool(["backend", "repo", "add", repository.name], parse_json=True, json_flag=False)
-    repository.checkout = result.get("checkout") if isinstance(result, dict) else None
-    retval = f"{repository.name}: cloned to {repository.checkout}" if repository.checkout else f"{repository.name}: clone requested"
+    if not isinstance(result, dict):
+        result = {}
+    repository.checkout = result.get("checkout")
+    if not repository.checkout:
+        retval = f"{repository.name}: clone requested"
+    elif result.get("cloned", True):
+        retval = f"{repository.name}: cloned to {repository.checkout}"
+    else:
+        retval = f"{repository.name}: checkout kept at {repository.checkout}"
     return retval
 
 
