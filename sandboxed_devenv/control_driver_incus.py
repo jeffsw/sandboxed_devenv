@@ -160,20 +160,22 @@ class IncusDriver:
     raw_disk = False
     live_resources = True
 
-    def incus(self, *args: str, capture: bool = False, check: bool = True, input: str | None = None) -> subprocess.CompletedProcess:
+    def incus(self, *args: str, capture: bool = False, check: bool = True, input: str | None = None,
+              query: bool = False) -> subprocess.CompletedProcess:
+        """One `incus` command; ``query`` marks one that only reads, which a dry run still runs."""
         kwargs = {}
         if capture:
             kwargs["capture_output"] = True
         if input is not None:
             kwargs["input"] = input
-        retval = self.runner.run([INCUS, *args], **kwargs)
+        retval = self.runner.run([INCUS, *args], query=query, **kwargs)
         if check and retval.returncode != 0:
             detail = (retval.stderr or "").strip() if capture else ""
             raise DriverError(f"incus {' '.join(args)} failed with status {retval.returncode}" + (f": {detail}" if detail else ""))
         return retval
 
     def query(self, *args: str) -> list | dict | None:
-        completed = self.incus(*args, "--format", "json", capture=True)
+        completed = self.incus(*args, "--format", "json", capture=True, query=True)
         text = (completed.stdout or "").strip()
         retval = json.loads(text) if text else None
         return retval
@@ -185,7 +187,7 @@ class IncusDriver:
         elif not shutil.which(INCUS):
             retval = "incus is not on the PATH; the Linux laptop installs it (docs/linux-laptop-install.md)"
         else:
-            completed = self.runner.run([INCUS, "info"], capture_output=True)
+            completed = self.runner.run([INCUS, "info"], capture_output=True, query=True)
             if completed.returncode != 0:
                 retval = (f"incus is installed but `incus info` fails ({(completed.stderr or '').strip()[-120:]}); is this "
                           "user in the incus-admin group, and has `incus admin init` run?")
@@ -200,7 +202,7 @@ class IncusDriver:
         if configured:
             retval = configured
         else:
-            completed = self.incus("network", "get", user_config.incus.network, "ipv4.address", capture=True)
+            completed = self.incus("network", "get", user_config.incus.network, "ipv4.address", capture=True, query=True)
             text = (completed.stdout or "").strip()
             if not text or text == "none":
                 raise DriverError(f"the Incus network {user_config.incus.network} has no IPv4 address; set incus.subnet "
@@ -225,13 +227,13 @@ class IncusDriver:
 
     def list(self) -> list[VmInfo]:
         retlist = []
-        for instance in parse_list((self.incus("list", "--format", "json", capture=True).stdout or "")):
+        for instance in parse_list((self.incus("list", "--format", "json", capture=True, query=True).stdout or "")):
             retlist.append(VmInfo(name=instance["name"], state=state_of(instance)))
         return retlist
 
     def instance(self, name: str) -> dict | None:
         retval = None
-        for instance in parse_list((self.incus("list", name, "--format", "json", capture=True).stdout or "")):
+        for instance in parse_list((self.incus("list", name, "--format", "json", capture=True, query=True).stdout or "")):
             if instance.get("name") == name:
                 retval = instance
                 break

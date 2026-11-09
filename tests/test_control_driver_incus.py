@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from sandboxed_devenv import config, control_driver, control_driver_incus
+from sandboxed_devenv import common, config, control_driver, control_driver_incus
 from sandboxed_devenv.control_driver import DriverError, VmSpec
 
 
@@ -194,3 +194,30 @@ def test_seed_iso_command_needs_a_tool(monkeypatch):
         control_driver_incus.seed_iso_command(pathlib.Path("/s"), pathlib.Path("/s.iso"))
     monkeypatch.setattr(control_driver_incus.shutil, "which", lambda name: "/usr/bin/mkisofs" if name == "mkisofs" else None)
     assert control_driver_incus.seed_iso_command(pathlib.Path("/s"), pathlib.Path("/s.iso"))[0] == "mkisofs"
+
+
+def test_queries_run_under_a_dry_run_and_changes_do_not(capsys):
+    """`new --dry-run` on the laptop failed on the bridge address (8 November): a dry run must
+    still read Incus, or the plan it prints is wrong. Only commands that change something are
+    held back."""
+
+    class DryRunner(FakeRunner):
+        dry_run = True
+
+        def run(self, command, **kwargs):
+            self.queries.append(kwargs.get("query", False))
+            retval = super().run(command, **kwargs)
+            return retval
+
+    runner = DryRunner([(0, INSTANCES, ""), (0, "10.42.0.1/24\n", ""), (0, "", "")])
+    runner.queries = []
+    driver = control_driver_incus.IncusDriver(runner=runner, user_config=config.UserConfig())
+    assert driver.exists("idesbx-p") is True
+    assert driver.address_pool(config.UserConfig()).subnet == "10.42.0.0/24"
+    driver.start("idesbx-p")
+    assert runner.queries == [True, True, False]
+    real = common.Runner(dry_run=True)
+    assert real.run(["false"]).returncode == 0
+    assert "would run: false" in capsys.readouterr().out
+    assert real.run(["false"], query=True, capture_output=True).returncode == 1
+    assert capsys.readouterr().out == ""

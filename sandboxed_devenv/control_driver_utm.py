@@ -153,11 +153,12 @@ class UtmDriver:
 
     # --- plumbing ---------------------------------------------------------------------------------
 
-    def utmctl(self, *args: str, capture: bool = False) -> subprocess.CompletedProcess:
+    def utmctl(self, *args: str, capture: bool = False, query: bool = False) -> subprocess.CompletedProcess:
+        """One `utmctl` command; ``query`` marks one that only reads, which a dry run still runs."""
         kwargs = {}
         if capture:
             kwargs["capture_output"] = True
-        retval = self.runner.run([UTMCTL, *args], **kwargs)
+        retval = self.runner.run([UTMCTL, *args], query=query, **kwargs)
         return retval
 
     def osascript(self, script: str, *args: str) -> str:
@@ -173,7 +174,7 @@ class UtmDriver:
         plist = config_plist(name)
         if not plist.is_file():
             raise DriverError(f"no bundle for {name} at {plist}")
-        completed = self.runner.run(["plutil", "-convert", "json", "-o", "-", str(plist)], capture_output=True)
+        completed = self.runner.run(["plutil", "-convert", "json", "-o", "-", str(plist)], capture_output=True, query=True)
         if completed.returncode != 0:
             raise DriverError(f"plutil could not read {plist}: {(completed.stderr or '').strip()}")
         retval = json.loads(completed.stdout) if completed.stdout else {}
@@ -242,7 +243,7 @@ class UtmDriver:
         return retval
 
     def list(self) -> list[VmInfo]:
-        completed = self.utmctl("list", capture=True)
+        completed = self.utmctl("list", capture=True, query=True)
         if completed.returncode != 0:
             raise DriverError(f"utmctl list failed with status {completed.returncode}: {(completed.stderr or '').strip()}")
         retlist = parse_list(completed.stdout or "")
@@ -257,7 +258,7 @@ class UtmDriver:
         return retval
 
     def state(self, name: str) -> str:
-        completed = self.utmctl("status", name, capture=True)
+        completed = self.utmctl("status", name, capture=True, query=True)
         if completed.returncode != 0:
             raise DriverError(f"no VM named {name}: {(completed.stderr or '').strip() or 'utmctl status failed'}")
         retval = (completed.stdout or "").strip() or "unknown"
