@@ -113,14 +113,16 @@ def format_duration(seconds: float) -> str:
 @dataclasses.dataclass
 class Runner:
     """Runs external commands for the control side. With ``dry_run`` it prints each command
-    instead and returns an empty success; with ``verbose`` it prints each command on stderr
-    before running it. Tests replace it."""
+    instead and returns an empty success, except a ``query``, a command that only reads (a
+    driver listing its VMs, a bridge's address), which runs either way so the plan a dry run
+    prints rests on the real state; with ``verbose`` it prints each command on stderr before
+    running it. Tests replace it."""
 
     dry_run: bool = False
     verbose: bool = False
 
-    def run(self, command: list[str], **kwargs) -> subprocess.CompletedProcess:
-        if self.dry_run:
+    def run(self, command: list[str], query: bool = False, **kwargs) -> subprocess.CompletedProcess:
+        if self.dry_run and not query:
             print(f"would run: {shlex.join(command)}")
             retval = subprocess.CompletedProcess(command, 0, "", "")
         else:

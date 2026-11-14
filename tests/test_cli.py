@@ -129,4 +129,6 @@ def test_doctor_runs(capsys):
 def test_render_dry_run_names_the_wheel_build(capsys):
     status = cli.main(["--dry-run", "render"])
     assert status == 0
-    assert "--wheel" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "would run in" in out and " build " in out
+    assert "--wheel" not in out, "the wheel is built from the sdist, never straight from the tree"

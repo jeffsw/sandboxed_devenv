@@ -65,6 +65,9 @@ sudo pipx install --global ~/proj/ide_sandbox/sandboxed_devenv
 mkdir -p ~/.sandboxed_devenv/secrets && chmod 700 ~/.sandboxed_devenv/secrets
 cat > ~/.sandboxed_devenv/config.yaml <<'YAML'
 client_host: local
+git:                                             # the identity for commits inside the backends;
+  user_name: Your Name                           # or `git config --global user.name` and `user.email`
+  user_email: you@example.com
 incus:
   storage_dir: /var/lib/sandboxed-devenv/incus   # optional; omit for Incus's default location
 YAML
@@ -108,10 +111,12 @@ user-namespace restriction, as they do on the Mac rig's desk VM.
 sandboxed-devenv image build              # Ubuntu's cloud image imported into Incus, booted once, published
 ```
 
-The first real run of the Incus driver. To confirm, in this order: the imported cloud image
-boots as a VM (UEFI, secure boot on); cloud-init finds the seed ISO attached as a disk device
-by its `cidata` label; the static lease on `incusbr0` gives the build VM the address the
-control side pinned its host key under; `incus publish` keeps the image as an alias.
+The first real run of the Incus driver on a machine confirmed, 8 November 2026: the imported
+cloud image boots as a VM (UEFI, secure boot on); cloud-init finds the seed ISO attached as a
+disk device by its `cidata` label (`/dev/sr0`); the static lease on `incusbr0` gives the build
+VM the address the control side pinned its host key under; `incus publish` keeps the image as
+an alias. Timings there: the cloud image downloaded in 40 s, cloud-init 98 s, publish 3 min
+20 s, 6 min 17 s in all.
 
 ## 4. The first project
 
@@ -119,13 +124,17 @@ control side pinned its host key under; `incus publish` keeps the image as an al
 sandboxed-devenv new PROJECT --repo OWNER/REPO
 sandboxed-devenv test host
 sandboxed-devenv test backend PROJECT
-mise run test-e2e                         # from the checkout
+sandboxed-devenv test end-to-end          # `mise run test-e2e` from a checkout that has mise
 ```
 
 In Gateway, started by `sandboxed-devenv client start` in the GNOME session, the project's
-connection is listed and `/home/dev/proj/PROJECT` opens. To confirm here: `incus init` from
-the alias, `incus copy` for `clone`, and the egress ruleset on the bridge once `enforce` is on.
-Record the timings in the summary (step 6 of 4.9).
+connection is listed and `/home/dev/proj/PROJECT` opens. Confirmed on the same machine:
+`incus init` from the alias (a backend ready in 49 s, 34 s of it the init), `resources`
+changing CPUs and memory on the running VM, and `clone` through a temporary published image
+(4 min 26 s, the publish most of it), since `incus copy` of a VM on a `dir` pool failed in the
+`dd` it runs with direct I/O. Still to
+confirm: the egress ruleset on the bridge once `enforce` is on. Record the timings in the
+summary (step 6 of 4.9).
 
 ## Differences from the Mac rig
 

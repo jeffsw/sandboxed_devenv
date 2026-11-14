@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from sandboxed_devenv import config, control_driver, control_driver_incus
+from sandboxed_devenv import common, config, control_driver, control_driver_incus
 from sandboxed_devenv.control_driver import DriverError, VmSpec
 
 
@@ -142,12 +142,16 @@ def test_lifecycle_clone_console_and_images(tmp_path, monkeypatch):
                                ["incus", "delete", "idesbx-p", "--force"]]
     assert not (tmp_path / "seeds" / "idesbx-p.iso").exists()
     assert driver.console_command("idesbx-p") == ["incus", "console", "idesbx-p", "--type=console"]
-    driver, runner = driver_with([(0, "", ""), (0, "", ""), (0, INSTANCES, ""), (0, "", ""), (0, "", ""), (0, "", ""), (0, "", "")])
-    driver.clone_from("idesbx-p", VmSpec(name="idesbx-q", disk=None, cpus=1, memory_gib=2, seed_dir=seed, address="10.42.0.21"))
-    assert runner.commands[0] == ["incus", "copy", "idesbx-p", "idesbx-q"]
+    driver, runner = driver_with([(0, "", ""), (0, "", ""), (0, "", ""), (0, "", ""), (0, INSTANCES, ""), (0, "", ""), (0, "", ""), (0, "", "")])
+    driver.clone_from("idesbx-p", VmSpec(name="idesbx-q", disk=None, cpus=1, memory_gib=2, seed_dir=seed, address="10.42.0.21",
+                                        disk_gib=32))
+    assert runner.commands[0] == ["incus", "publish", "idesbx-p", "--alias", "sandboxed-devenv-import-clone-idesbx-q", "--reuse"]
+    assert runner.commands[1] == ["incus", "init", "sandboxed-devenv-import-clone-idesbx-q", "idesbx-q", "--vm", "--storage", "sandboxed-devenv",
+                                  "-c", "limits.cpu=1", "-c", "limits.memory=2GiB", "-d", "root,size=32GiB"]
+    assert runner.commands[2] == ["incus", "image", "delete", "sandboxed-devenv-import-clone-idesbx-q"]
     # idesbx-q as recorded has no devices of its own yet, so the nic is overridden from the profile.
     assert ["incus", "config", "device", "override", "idesbx-q", "eth0", "ipv4.address=10.42.0.21"] in runner.commands
-    driver, runner = driver_with([(0, "", ""), (0, "", ""), (0, INSTANCES, ""), (0, "", ""), (0, "", ""), (0, "", ""), (0, "", "")])
+    driver, runner = driver_with([(0, "", ""), (0, "", ""), (0, "", ""), (0, "", ""), (0, INSTANCES, ""), (0, "", ""), (0, "", ""), (0, "", "")])
     driver.clone_from("idesbx-x", VmSpec(name="idesbx-p", disk=None, cpus=1, memory_gib=2, seed_dir=seed, address="10.42.0.22"))
     assert ["incus", "config", "device", "remove", "idesbx-p", "cidata"] in runner.commands
     assert ["incus", "config", "device", "set", "idesbx-p", "eth0", "ipv4.address=10.42.0.22"] in runner.commands
@@ -190,3 +194,30 @@ def test_seed_iso_command_needs_a_tool(monkeypatch):
         control_driver_incus.seed_iso_command(pathlib.Path("/s"), pathlib.Path("/s.iso"))
     monkeypatch.setattr(control_driver_incus.shutil, "which", lambda name: "/usr/bin/mkisofs" if name == "mkisofs" else None)
     assert control_driver_incus.seed_iso_command(pathlib.Path("/s"), pathlib.Path("/s.iso"))[0] == "mkisofs"
+
+
+def test_queries_run_under_a_dry_run_and_changes_do_not(capsys):
+    """`new --dry-run` on the laptop failed on the bridge address (8 November): a dry run must
+    still read Incus, or the plan it prints is wrong. Only commands that change something are
+    held back."""
+
+    class DryRunner(FakeRunner):
+        dry_run = True
+
+        def run(self, command, **kwargs):
+            self.queries.append(kwargs.get("query", False))
+            retval = super().run(command, **kwargs)
+            return retval
+
+    runner = DryRunner([(0, INSTANCES, ""), (0, "10.42.0.1/24\n", ""), (0, "", "")])
+    runner.queries = []
+    driver = control_driver_incus.IncusDriver(runner=runner, user_config=config.UserConfig())
+    assert driver.exists("idesbx-p") is True
+    assert driver.address_pool(config.UserConfig()).subnet == "10.42.0.0/24"
+    driver.start("idesbx-p")
+    assert runner.queries == [True, True, False]
+    real = common.Runner(dry_run=True)
+    assert real.run(["false"]).returncode == 0
+    assert "would run: false" in capsys.readouterr().out
+    assert real.run(["false"], query=True, capture_output=True).returncode == 1
+    assert capsys.readouterr().out == ""

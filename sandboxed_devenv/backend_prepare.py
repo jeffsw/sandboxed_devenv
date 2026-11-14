@@ -8,7 +8,9 @@ at first boot and is idempotent: the image files again, GitHub's SSH host keys, 
 identity, Claude's settings from ``project.yaml``, a key pair and alias stanza per listed
 repository (no clone yet: the control side registers the keys on GitHub first, then runs
 `backend repo add` again, which clones), and ``prepared.yaml``, which `backend status` turns
-into ``ready``.
+into ``ready``. On a copy of another project's backend (``cloned_from`` in project.yaml) the
+source project's directory moves to the new name first, working trees and all, so `repo add`
+finds the checkouts in place and clones nothing.
 
 `backend repo add / rm / rekey / ls` are the VM side of the control machine's `repo` commands
 and print JSON. A repository's key pair lives at ``~dev/.ssh/deploy_<owner>_<repo>``, its alias
@@ -202,7 +204,9 @@ def fingerprint(public_key_file: pathlib.Path) -> str:
     return retval
 
 
-def repository_record(paths: Paths, owner: str, repo: str, project: str | None, created: bool = False) -> dict:
+def repository_record(paths: Paths, owner: str, repo: str, project: str | None, created: bool = False,
+                      cloned: bool = False) -> dict:
+    """``created`` and ``cloned`` say what this call did: minted the key pair, ran the clone."""
     key_file = paths.key_file(owner, repo)
     public = key_file.with_suffix(".pub")
     checkout = paths.checkout(project, repo) if project else None
@@ -213,6 +217,7 @@ def repository_record(paths: Paths, owner: str, repo: str, project: str | None, 
         "public_key": (read_text(public) or "").strip(),
         "fingerprint": fingerprint(public) if public.exists() else None,
         "created": created,
+        "cloned": cloned,
         "checkout": str(checkout) if checkout and checkout.is_dir() else None,
     }
     return retdict
@@ -220,10 +225,11 @@ def repository_record(paths: Paths, owner: str, repo: str, project: str | None, 
 
 def add_repository(paths: Paths, name: str, project: str | None, clone: bool, hostname: str) -> dict:
     """Idempotent: a missing key pair is minted, a missing stanza written, a missing checkout cloned
-    when asked and a project is known."""
+    when asked and a project is known; a checkout already there (a copy's) is kept."""
     owner, repo = split_repository(name)
     key_file = paths.key_file(owner, repo)
     created = False
+    cloned = False
     if not key_file.exists():
         mint_key(paths, key_file, f"{owner}/{repo} deploy key on {hostname}")
         created = True
@@ -241,7 +247,8 @@ def add_repository(paths: Paths, name: str, project: str | None, clone: bool, ho
             completed = run_as(paths, ["git", "clone", clone_url(owner, repo), str(checkout)], capture_output=True)
             if completed.returncode != 0:
                 raise RuntimeError(f"git clone failed: {completed.stderr.strip()}")
-    retdict = repository_record(paths, owner, repo, project, created)
+            cloned = True
+    retdict = repository_record(paths, owner, repo, project, created, cloned)
     return retdict
 
 
@@ -516,6 +523,28 @@ def step_git_identity(ctx: Context) -> list[Outcome]:
     return retlist
 
 
+def step_inherited_project_dir(ctx: Context) -> list[Outcome]:
+    """On a copy of another project's backend: the source project's directory, working trees and
+    all, moved to the new project's name, so Gateway opens the copy and `repo add` finds the
+    checkouts in place. Nothing to do on a backend made by `new`; both directories present (the
+    source already had one under the new name) are left alone and said so."""
+    retlist = []
+    if not ctx.project.cloned_from:
+        return retlist
+    source = ctx.paths.proj_dir / ctx.project.cloned_from
+    target = ctx.paths.proj_dir / ctx.project.project
+    differs = source.is_dir() and not target.exists()
+    if target.exists() and source.is_dir():
+        unchanged = f"present; {source} is there too, left alone"
+    elif target.exists():
+        unchanged = "present"
+    else:
+        unchanged = f"nothing at {source} to move"
+    retlist.append(outcome(ctx, f"directory {target}", f"moved from {source}, the copy's working trees", differs,
+                           lambda: source.rename(target), unchanged))
+    return retlist
+
+
 def step_project_dir(ctx: Context) -> list[Outcome]:
     """``~dev/proj/<project>``, where the repositories are cloned and the IDE project opens; made
     at first boot so Gateway has a directory to open before any repository is registered."""
@@ -557,8 +586,8 @@ def step_prepared_marker(ctx: Context) -> list[Outcome]:
 
 
 IMAGE_STEPS = [step_files, step_sshd, step_image_marker]
-PROJECT_STEPS = [step_files, step_sshd, step_github_host_keys, step_git_identity, step_project_dir, step_repositories,
-                 step_prepared_marker]
+PROJECT_STEPS = [step_files, step_sshd, step_github_host_keys, step_git_identity, step_inherited_project_dir,
+                 step_project_dir, step_repositories, step_prepared_marker]
 
 
 def cmd_prepare(args) -> int:

@@ -15,7 +15,11 @@ and the things to confirm there are marked. The shape:
 - Addresses are static leases on the managed bridge (``ipv4.address`` on the instance's nic
   device), from a pool on the bridge's subnet, so the control side knows a backend's address
   before it boots and the guest just takes DHCP; the seed carries no network-config.
-- `incus copy` makes a clone; its seed device is replaced by the new project's.
+- A clone goes through a temporary published image: `incus publish` of the stopped source,
+  `incus init` from it, then the new project's seed, lease and limits. `incus copy` was the
+  first choice, but on the laptop (Incus 6.0.5, a `dir` pool on ext4 over LUKS) it fails in
+  the `dd` it runs with direct I/O, and it would carry the source's static lease into the
+  copy; publishing is the path `image build` already proved. A full copy either way.
 - CPUs and memory change on a running VM (`limits.cpu`, `limits.memory`); the serial console
   is `incus console --type=console`.
 - The storage pool is `dir` on ``incus.storage_dir`` (``host install`` creates it); the VM's
@@ -156,20 +160,22 @@ class IncusDriver:
     raw_disk = False
     live_resources = True
 
-    def incus(self, *args: str, capture: bool = False, check: bool = True, input: str | None = None) -> subprocess.CompletedProcess:
+    def incus(self, *args: str, capture: bool = False, check: bool = True, input: str | None = None,
+              query: bool = False) -> subprocess.CompletedProcess:
+        """One `incus` command; ``query`` marks one that only reads, which a dry run still runs."""
         kwargs = {}
         if capture:
             kwargs["capture_output"] = True
         if input is not None:
             kwargs["input"] = input
-        retval = self.runner.run([INCUS, *args], **kwargs)
+        retval = self.runner.run([INCUS, *args], query=query, **kwargs)
         if check and retval.returncode != 0:
             detail = (retval.stderr or "").strip() if capture else ""
             raise DriverError(f"incus {' '.join(args)} failed with status {retval.returncode}" + (f": {detail}" if detail else ""))
         return retval
 
     def query(self, *args: str) -> list | dict | None:
-        completed = self.incus(*args, "--format", "json", capture=True)
+        completed = self.incus(*args, "--format", "json", capture=True, query=True)
         text = (completed.stdout or "").strip()
         retval = json.loads(text) if text else None
         return retval
@@ -181,7 +187,7 @@ class IncusDriver:
         elif not shutil.which(INCUS):
             retval = "incus is not on the PATH; the Linux laptop installs it (docs/linux-laptop-install.md)"
         else:
-            completed = self.runner.run([INCUS, "info"], capture_output=True)
+            completed = self.runner.run([INCUS, "info"], capture_output=True, query=True)
             if completed.returncode != 0:
                 retval = (f"incus is installed but `incus info` fails ({(completed.stderr or '').strip()[-120:]}); is this "
                           "user in the incus-admin group, and has `incus admin init` run?")
@@ -196,7 +202,7 @@ class IncusDriver:
         if configured:
             retval = configured
         else:
-            completed = self.incus("network", "get", user_config.incus.network, "ipv4.address", capture=True)
+            completed = self.incus("network", "get", user_config.incus.network, "ipv4.address", capture=True, query=True)
             text = (completed.stdout or "").strip()
             if not text or text == "none":
                 raise DriverError(f"the Incus network {user_config.incus.network} has no IPv4 address; set incus.subnet "
@@ -221,13 +227,13 @@ class IncusDriver:
 
     def list(self) -> list[VmInfo]:
         retlist = []
-        for instance in parse_list((self.incus("list", "--format", "json", capture=True).stdout or "")):
+        for instance in parse_list((self.incus("list", "--format", "json", capture=True, query=True).stdout or "")):
             retlist.append(VmInfo(name=instance["name"], state=state_of(instance)))
         return retlist
 
     def instance(self, name: str) -> dict | None:
         retval = None
-        for instance in parse_list((self.incus("list", name, "--format", "json", capture=True).stdout or "")):
+        for instance in parse_list((self.incus("list", name, "--format", "json", capture=True, query=True).stdout or "")):
             if instance.get("name") == name:
                 retval = instance
                 break
@@ -321,9 +327,18 @@ class IncusDriver:
         self.incus("copy", name, new_name)
 
     def clone_from(self, source: str, spec: VmSpec) -> None:
-        """`incus copy` of the stopped source, then the new project's seed, lease and limits in
-        place of the source's."""
-        self.incus("copy", source, spec.name)
+        """The stopped source published as a temporary image, a new instance made from it with
+        the spec's resources, then the new project's seed and lease; the temporary image goes."""
+        alias = f"{TEMPORARY_IMAGE_PREFIX}clone-{spec.name}"
+        self.incus("publish", source, "--alias", alias, "--reuse")
+        try:
+            arguments = ["init", alias, spec.name, "--vm", "--storage", self.user_config.incus.pool,
+                         "-c", f"limits.cpu={spec.cpus}", "-c", f"limits.memory={spec.memory_gib}GiB"]
+            if spec.disk_gib:
+                arguments += ["-d", f"{ROOT_DEVICE},size={spec.disk_gib}GiB"]
+            self.incus(*arguments)
+        finally:
+            self.incus("image", "delete", alias, check=False)
         self.configure(spec.name, spec)
 
     def address(self, name: str) -> str | None:

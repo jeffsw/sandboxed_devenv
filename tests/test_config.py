@@ -54,6 +54,14 @@ def test_project_config_round_trips(tmp_path):
         config.ProjectConfig(project="has space", git=project.git)
 
 
+def test_project_config_names_its_source_when_a_copy():
+    identity = config.GitIdentity(user_name="D", user_email="d@example.invalid")
+    assert "cloned_from" not in config.ProjectConfig(project="p", git=identity).to_yaml()
+    assert "cloned_from: p" in config.ProjectConfig(project="q", git=identity, cloned_from="p").to_yaml()
+    with pytest.raises(Exception):
+        config.ProjectConfig(project="q", git=identity, cloned_from="has space")
+
+
 def test_versions_load_and_urls():
     versions = config.load_versions()
     assert versions.gateway.branch == ".".join(versions.gateway.version.split(".")[:2])

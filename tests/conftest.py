@@ -152,28 +152,28 @@ class FakeDriver:
         self.resources_of[name] = (cpus or current[0], memory_gib or current[1])
 
 
-def repositories_from_seed(seed: dict) -> list[str]:
-    """The repositories named in a project seed's project.yaml, as the backend would mint keys for."""
-    retlist = []
+def project_from_seed(seed: dict) -> dict:
+    """The project.yaml a project seed writes, decoded: the name, the repositories the backend
+    mints keys for, the project it was copied from."""
+    retdict = {}
     document = yaml.safe_load(seed.get("user-data", "")) or {}
     for entry in document.get("write_files") or []:
         if entry.get("path") == str(config.BACKEND_PROJECT_CONFIG):
-            project = yaml.safe_load(base64.b64decode(entry["content"]))
-            for repository in project.get("repositories") or []:
-                retlist.append(repository["name"])
-    return retlist
+            retdict = yaml.safe_load(base64.b64decode(entry["content"]))
+    return retdict
 
 
 class FakeBackend:
     """What remote.backend() returns: a ready backend with a key pair per repository it knows,
     `backend repo` commands that behave like the real ones, and a project.yaml for rotation."""
 
-    def __init__(self, address, vm_name, runner=None, repositories=None):
+    def __init__(self, address, vm_name, runner=None, repositories=None, project="p"):
         self.address = address
         self.vm_name = vm_name
         self.runner = runner or common.Runner()
         self.target = f"dev@{address}"
         self.calls = []
+        self.project = project
         self.repositories = list(repositories or [])
         self.generation = {}
         self.checkouts = set()
@@ -189,9 +189,16 @@ class FakeBackend:
         retdict = {
             "repository": name, "alias": f"github.com-{name.replace('/', '-')}", "key_file": f"/home/dev/.ssh/deploy_{name.replace('/', '_')}",
             "fingerprint": f"SHA256:{name}{suffix}", "public_key": f"ssh-ed25519 KEY{name.replace('/', '-')}{suffix} comment",
-            "created": False, "checkout": f"/home/dev/proj/p/{name.split('/')[1]}" if name in self.checkouts else None,
+            "created": False, "checkout": f"/home/dev/proj/{self.project}/{name.split('/')[1]}" if name in self.checkouts else None,
         }
         return retdict
+
+    def inherit(self, source):
+        """What a copy of another backend's disk brings: its key pairs and its checkouts, which
+        `backend prepare` moves under the new project's name."""
+        self.repositories = list(source.repositories)
+        self.generation = dict(source.generation)
+        self.checkouts = set(source.checkouts)
 
     def wait_for_ssh(self, timeout, interval=5.0):
         self.calls.append("wait_for_ssh")
@@ -239,9 +246,11 @@ class FakeBackend:
                 created = name not in self.repositories
                 if created:
                     self.repositories.append(name)
+                cloned = False
                 if "--no-clone" not in args:
+                    cloned = name not in self.checkouts
                     self.checkouts.add(name)
-                retval = dict(self.key_record(name), created=created)
+                retval = dict(self.key_record(name), created=created, cloned=cloned)
             elif args[2] == "rekey":
                 self.generation[name] = self.generation.get(name, 0) + 1
                 if name not in self.repositories:
@@ -412,8 +421,15 @@ def rig(tmp_path, monkeypatch):
 
     def fake_backend(address, vm_name, runner=None):
         if address not in backends:
-            repositories = repositories_from_seed(driver.seeds.get(vm_name, {}))
-            backends[address] = FakeBackend(address, vm_name, runner, repositories)
+            seed_project = project_from_seed(driver.seeds.get(vm_name, {}))
+            repositories = []
+            for repository in seed_project.get("repositories") or []:
+                repositories.append(repository["name"])
+            backend = FakeBackend(address, vm_name, runner, repositories, project=seed_project.get("project", "p"))
+            for other in backends.values():
+                if seed_project.get("cloned_from") and other.project == seed_project["cloned_from"]:
+                    backend.inherit(other)
+            backends[address] = backend
         retval = backends[address]
         return retval
 
