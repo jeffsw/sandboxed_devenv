@@ -61,7 +61,9 @@ sudo chmod 440 /etc/sudoers.d/sandboxed-devenv
 gh auth login                             # the browser flow; then let git use the same login
 gh auth setup-git
 git clone https://github.com/jeffsw/sandboxed_devenv.git ~/proj/ide_sandbox/sandboxed_devenv
-sudo pipx install --global ~/proj/ide_sandbox/sandboxed_devenv
+wheel_dir=$(mktemp -d)                    # built as yourself; only the wheel goes through sudo
+pipx run build --outdir "$wheel_dir" ~/proj/ide_sandbox/sandboxed_devenv
+sudo pipx install --global --force "$wheel_dir"/sandboxed_devenv-*.whl
 mkdir -p ~/.sandboxed_devenv/secrets && chmod 700 ~/.sandboxed_devenv/secrets
 cat > ~/.sandboxed_devenv/config.yaml <<'YAML'
 client_host: local
@@ -73,6 +75,15 @@ incus:
 YAML
 cp ~/proj/ide_sandbox/sandboxed_devenv/sandboxed_devenv/policy.yaml ~/.sandboxed_devenv/policy.yaml
 ```
+
+The three package lines are also the upgrade after a `git pull`; `--force` replaces the
+installed version. `pipx run build` fetches the `build` tool into pipx's own cache, no root
+needed, and leaves `build/` and `sandboxed_devenv.egg-info` in the checkout owned by you,
+which git ignores. Do not point `sudo pipx install` at the checkout instead: pip builds in the
+source tree as the user running it, so root leaves those two directories there owned by root,
+and the next `sandboxed-devenv image build`, which builds its wheel from the same checkout as
+you, stops on them with "Cannot update time stamp of directory 'sandboxed_devenv.egg-info'"
+(14 November 2026). If that has happened, `sudo rm -rf` both directories and run it again.
 
 Edit the copied `policy.yaml`: `uplink_interface` is the machine's interface toward the
 Internet (`ip route show default` names it); `vm_subnet` is `incusbr0`'s subnet

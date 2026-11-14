@@ -238,7 +238,10 @@ One mechanism per operating system, and the result is the same everywhere:
 `sandboxed-devenv` on the PATH of every user that needs it.
 
 - **Linux, which is `desk`, every backend VM and the Linux laptop:** `sudo pipx install
-  --global WHEEL_OR_CHECKOUT`. The venv lands under `/opt/pipx` and the command in
+  --global WHEEL`, never the checkout: pip builds in the source tree as the user running
+  it, and a build as root leaves `build/` and `*.egg-info` there owned by root, which the
+  user's next `image build` cannot touch (the laptop, 14 November). On the laptop the wheel
+  comes from `pipx run build` as the user. The venv lands under `/opt/pipx` and the command in
   `/usr/local/bin`, readable by `jsw`, `gw`, `dev` and root, and inside sudo's
   `secure_path`, so `sudo -u gw sandboxed-devenv client session` resolves without PATH
   tricks. Ubuntu 26.04 ships pipx 1.8.0; the `--global` option arrived in 1.5.0. Confirmed
@@ -735,7 +738,9 @@ Written before the laptop arrives, first run on it.
       full-disk encryption, no separate volume (the Incus pool is a directory on the
       root filesystem; only free space matters), another user or VM for credentials that
       have nothing to do with development (summary section 5), then the package:
-      `sudo pipx install --global ~/proj/ide_sandbox/sandboxed_devenv`,
+      `pipx run build` as the user and `sudo pipx install --global` of the wheel (the
+      checkout itself until 14 November, when a build as root left root-owned `build/` and
+      `*.egg-info` in it that the user's `image build` could not touch),
       `client_host: local` in the config, the user's `policy.yaml` with the laptop's
       uplink and bridge subnet, `sudo sandboxed-devenv host install`,
       `sandboxed-devenv image build`, `sandboxed-devenv new` for the first project,
